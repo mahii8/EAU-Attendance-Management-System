@@ -8,10 +8,27 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, Pencil, Trash2 } from "lucide-react";
+import { Search, Pencil, Trash2, Plus, Upload } from "lucide-react";
 import { toast } from "sonner";
-import axios from "@/api/axios";
+import {
+  getStudentsApi,
+  createStudentApi,
+  updateStudentApi,
+  deleteStudentApi,
+  getSectionsApi,
+} from "@/api/axios";
 
+interface Programme {
+  id: number;
+  name: string;
+  duration_years: number;
+}
+interface Section {
+  id: number;
+  name: string;
+  year: number;
+  semester: number;
+}
 interface Student {
   id: number;
   first_name: string;
@@ -21,15 +38,30 @@ interface Student {
   parent_email: string;
   parent_telegram: string;
   section_name: string;
+  section_year: number;
+  programme_name: string;
 }
 
-const StudentsTab = () => {
+interface StudentsTabProps {
+  programmes: Programme[];
+}
+
+const StudentsTab = ({ programmes }: StudentsTabProps) => {
   const [students, setStudents] = useState<Student[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+
+  // Filters
+  const [filterProgramme, setFilterProgramme] = useState("");
+  const [filterYear, setFilterYear] = useState("");
+  const [filterSection, setFilterSection] = useState("");
+  const [sections, setSections] = useState<Section[]>([]);
+  const [years, setYears] = useState<number[]>([]);
+
+  // Edit modal
   const [editOpen, setEditOpen] = useState(false);
   const [editStudent, setEditStudent] = useState<Student | null>(null);
-  const [form, setForm] = useState({
+  const [editForm, setEditForm] = useState({
     first_name: "",
     last_name: "",
     email: "",
@@ -38,34 +70,95 @@ const StudentsTab = () => {
   });
   const [saving, setSaving] = useState(false);
 
+  // Add modal
+  const [addOpen, setAddOpen] = useState(false);
+  const [addForm, setAddForm] = useState({
+    first_name: "",
+    last_name: "",
+    student_id: "",
+    email: "",
+    parent_email: "",
+    parent_telegram: "",
+    section_id: "",
+  });
+  const [addSections, setAddSections] = useState<Section[]>([]);
+  const [addProgramme, setAddProgramme] = useState("");
+  const [addYear, setAddYear] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  // Bulk import
+  const [importOpen, setImportOpen] = useState(false);
+
   useEffect(() => {
-    const fetchStudents = async () => {
-      try {
-        const coursesRes = await axios.get("/courses/");
-        const allStudents: Student[] = [];
-        const seen = new Set();
-        for (const course of coursesRes.data) {
-          const res = await axios.get(`/courses/${course.id}/students/`);
-          for (const s of res.data.students || []) {
-            if (!seen.has(s.id)) {
-              seen.add(s.id);
-              allStudents.push(s);
-            }
-          }
-        }
-        setStudents(allStudents);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchStudents();
   }, []);
 
+  const fetchStudents = async () => {
+    try {
+      setLoading(true);
+      const params: any = {};
+      if (filterProgramme) params.programme = filterProgramme;
+      if (filterYear) params.year = filterYear;
+      if (filterSection) params.section = filterSection;
+      if (search) params.search = search;
+      const res = await getStudentsApi(params);
+      setStudents(res.data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStudents();
+  }, [filterProgramme, filterYear, filterSection]);
+
+  // When filter programme changes — build year list
+  useEffect(() => {
+    if (!filterProgramme) {
+      setYears([]);
+      setSections([]);
+      setFilterYear("");
+      setFilterSection("");
+      return;
+    }
+    const prog = programmes.find((p) => p.id === parseInt(filterProgramme));
+    if (prog)
+      setYears(Array.from({ length: prog.duration_years }, (_, i) => i + 1));
+    setFilterYear("");
+    setFilterSection("");
+  }, [filterProgramme]);
+
+  // When filter year changes — load sections
+  useEffect(() => {
+    if (!filterProgramme || !filterYear) {
+      setSections([]);
+      setFilterSection("");
+      return;
+    }
+    getSectionsApi({
+      programme: parseInt(filterProgramme),
+      year: parseInt(filterYear),
+    }).then((res) => setSections(res.data));
+    setFilterSection("");
+  }, [filterYear]);
+
+  // Add modal — when programme/year changes load sections
+  useEffect(() => {
+    if (!addProgramme || !addYear) {
+      setAddSections([]);
+      return;
+    }
+    getSectionsApi({
+      programme: parseInt(addProgramme),
+      year: parseInt(addYear),
+    }).then((res) => setAddSections(res.data));
+  }, [addProgramme, addYear]);
+
   const openEdit = (student: Student) => {
     setEditStudent(student);
-    setForm({
+    setEditForm({
       first_name: student.first_name,
       last_name: student.last_name,
       email: student.email,
@@ -79,24 +172,112 @@ const StudentsTab = () => {
     if (!editStudent) return;
     setSaving(true);
     try {
-      await axios.patch(`/students/${editStudent.id}/`, form);
+      await updateStudentApi(editStudent.id, editForm);
       setStudents((prev) =>
-        prev.map((s) => (s.id === editStudent.id ? { ...s, ...form } : s)),
+        prev.map((s) => (s.id === editStudent.id ? { ...s, ...editForm } : s)),
       );
       toast.success("Student updated!");
       setEditOpen(false);
     } catch {
-      setStudents((prev) =>
-        prev.map((s) => (s.id === editStudent.id ? { ...s, ...form } : s)),
-      );
-      toast.success("Student updated!");
-      setEditOpen(false);
+      toast.error("Failed to update student");
     } finally {
       setSaving(false);
     }
   };
 
+  const handleDelete = async (id: number) => {
+    if (!confirm("Are you sure you want to delete this student?")) return;
+    try {
+      await deleteStudentApi(id);
+      setStudents((prev) => prev.filter((s) => s.id !== id));
+      toast.success("Student deleted!");
+    } catch {
+      toast.error("Failed to delete student");
+    }
+  };
+
+  const handleAdd = async () => {
+    if (
+      !addForm.first_name ||
+      !addForm.last_name ||
+      !addForm.student_id ||
+      !addForm.email ||
+      !addForm.section_id
+    ) {
+      toast.error("Please fill all required fields");
+      return;
+    }
+    setAdding(true);
+    try {
+      const res = await createStudentApi({
+        first_name: addForm.first_name,
+        last_name: addForm.last_name,
+        student_id: addForm.student_id,
+        email: addForm.email,
+        parent_email: addForm.parent_email,
+        parent_telegram: addForm.parent_telegram,
+        section_id: parseInt(addForm.section_id),
+      });
+      setStudents((prev) => [...prev, res.data]);
+      toast.success("Student added!");
+      setAddOpen(false);
+      setAddForm({
+        first_name: "",
+        last_name: "",
+        student_id: "",
+        email: "",
+        parent_email: "",
+        parent_telegram: "",
+        section_id: "",
+      });
+      setAddProgramme("");
+      setAddYear("");
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || "Failed to add student");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleBulkImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const text = ev.target?.result as string;
+      const lines = text.split("\n").filter(Boolean);
+      const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+      let imported = 0;
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(",").map((v) => v.trim());
+        const row: any = {};
+        headers.forEach((h, idx) => {
+          row[h] = values[idx] || "";
+        });
+        if (!row["first_name"] || !row["student_id"] || !row["section_id"])
+          continue;
+        try {
+          await createStudentApi({
+            first_name: row["first_name"],
+            last_name: row["last_name"] || "",
+            student_id: row["student_id"],
+            email: row["email"] || `${row["student_id"]}@eau.edu.et`,
+            parent_email: row["parent_email"] || "",
+            parent_telegram: row["parent_telegram"] || "",
+            section_id: parseInt(row["section_id"]),
+          });
+          imported++;
+        } catch {}
+      }
+      toast.success(`Imported ${imported} students!`);
+      fetchStudents();
+      setImportOpen(false);
+    };
+    reader.readAsText(file);
+  };
+
   const filtered = students.filter((s) => {
+    if (!search) return true;
     const name = `${s.first_name} ${s.last_name}`.toLowerCase();
     return (
       name.includes(search.toLowerCase()) ||
@@ -105,21 +286,96 @@ const StudentsTab = () => {
     );
   });
 
+  const addYears = addProgramme
+    ? Array.from(
+        {
+          length:
+            programmes.find((p) => p.id === parseInt(addProgramme))
+              ?.duration_years || 4,
+        },
+        (_, i) => i + 1,
+      )
+    : [];
+
   return (
     <>
       <Card className="shadow-card border-border/50">
-        <CardHeader className="flex flex-row items-center justify-between pb-4">
-          <CardTitle className="font-display text-base">
-            Student Management
-          </CardTitle>
-          <div className="relative w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Search students..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 h-9 text-sm"
-            />
+        <CardHeader className="pb-4">
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="font-display text-base">
+                Student Management
+              </CardTitle>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5"
+                  onClick={() => setImportOpen(true)}
+                >
+                  <Upload className="w-4 h-4" /> Import CSV
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-1.5 bg-primary hover:bg-primary/90"
+                  onClick={() => setAddOpen(true)}
+                >
+                  <Plus className="w-4 h-4" /> Add Student
+                </Button>
+              </div>
+            </div>
+
+            {/* Filters */}
+            <div className="flex flex-wrap gap-3 items-end">
+              <select
+                value={filterProgramme}
+                onChange={(e) => setFilterProgramme(e.target.value)}
+                className="border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">All Programmes</option>
+                {programmes.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={filterYear}
+                onChange={(e) => setFilterYear(e.target.value)}
+                disabled={!filterProgramme}
+                className="border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              >
+                <option value="">All Years</option>
+                {years.map((y) => (
+                  <option key={y} value={y}>
+                    Year {y}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={filterSection}
+                onChange={(e) => setFilterSection(e.target.value)}
+                disabled={!filterYear}
+                className="border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              >
+                <option value="">All Sections</option>
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    Section {s.name}
+                  </option>
+                ))}
+              </select>
+              <div className="relative flex-1 min-w-48">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search students..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && fetchStudents()}
+                  className="pl-9 h-9 text-sm"
+                />
+              </div>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -131,6 +387,9 @@ const StudentsTab = () => {
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
                   University ID
+                </th>
+                <th className="text-left px-6 py-3 font-medium text-muted-foreground">
+                  Programme / Year
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
                   Email
@@ -150,7 +409,7 @@ const StudentsTab = () => {
               {loading && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="text-center py-12 text-muted-foreground"
                   >
                     Loading students...
@@ -160,7 +419,7 @@ const StudentsTab = () => {
               {!loading && filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="text-center py-12 text-muted-foreground"
                   >
                     No students found
@@ -174,6 +433,12 @@ const StudentsTab = () => {
                   </td>
                   <td className="px-6 py-4 font-mono text-xs text-primary">
                     {s.student_id}
+                  </td>
+                  <td className="px-6 py-4 text-muted-foreground text-xs">
+                    <p>{s.programme_name}</p>
+                    <p className="text-muted-foreground/60">
+                      Year {s.section_year} · Section {s.section_name}
+                    </p>
                   </td>
                   <td className="px-6 py-4 text-muted-foreground">{s.email}</td>
                   <td className="px-6 py-4 text-muted-foreground">
@@ -197,7 +462,7 @@ const StudentsTab = () => {
                         <Pencil className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => toast.error("Delete coming soon!")}
+                        onClick={() => handleDelete(s.id)}
                         className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -211,6 +476,7 @@ const StudentsTab = () => {
         </CardContent>
       </Card>
 
+      {/* Edit Modal */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -223,9 +489,9 @@ const StudentsTab = () => {
                   First Name
                 </p>
                 <input
-                  value={form.first_name}
+                  value={editForm.first_name}
                   onChange={(e) =>
-                    setForm({ ...form, first_name: e.target.value })
+                    setEditForm({ ...editForm, first_name: e.target.value })
                   }
                   className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
                 />
@@ -235,9 +501,9 @@ const StudentsTab = () => {
                   Last Name
                 </p>
                 <input
-                  value={form.last_name}
+                  value={editForm.last_name}
                   onChange={(e) =>
-                    setForm({ ...form, last_name: e.target.value })
+                    setEditForm({ ...editForm, last_name: e.target.value })
                   }
                   className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
                 />
@@ -248,8 +514,10 @@ const StudentsTab = () => {
                 Email
               </p>
               <input
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                value={editForm.email}
+                onChange={(e) =>
+                  setEditForm({ ...editForm, email: e.target.value })
+                }
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
@@ -258,9 +526,9 @@ const StudentsTab = () => {
                 Parent Telegram
               </p>
               <input
-                value={form.parent_telegram}
+                value={editForm.parent_telegram}
                 onChange={(e) =>
-                  setForm({ ...form, parent_telegram: e.target.value })
+                  setEditForm({ ...editForm, parent_telegram: e.target.value })
                 }
                 placeholder="@username"
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
@@ -271,9 +539,9 @@ const StudentsTab = () => {
                 Parent Email
               </p>
               <input
-                value={form.parent_email}
+                value={editForm.parent_email}
                 onChange={(e) =>
-                  setForm({ ...form, parent_email: e.target.value })
+                  setEditForm({ ...editForm, parent_email: e.target.value })
                 }
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
               />
@@ -288,6 +556,209 @@ const StudentsTab = () => {
                 className="bg-primary hover:bg-primary/90"
               >
                 {saving ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Student Modal */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-display">Add New Student</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  First Name *
+                </p>
+                <input
+                  value={addForm.first_name}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, first_name: e.target.value })
+                  }
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Last Name *
+                </p>
+                <input
+                  value={addForm.last_name}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, last_name: e.target.value })
+                  }
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Registration No *
+                </p>
+                <input
+                  value={addForm.student_id}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, student_id: e.target.value })
+                  }
+                  placeholder="UGR/10001/24"
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Email *
+                </p>
+                <input
+                  value={addForm.email}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, email: e.target.value })
+                  }
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+            </div>
+            {/* Section selector */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Programme *
+                </p>
+                <select
+                  value={addProgramme}
+                  onChange={(e) => setAddProgramme(e.target.value)}
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="">Select</option>
+                  {programmes.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Year *
+                </p>
+                <select
+                  value={addYear}
+                  onChange={(e) => setAddYear(e.target.value)}
+                  disabled={!addProgramme}
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                >
+                  <option value="">Select</option>
+                  {addYears.map((y) => (
+                    <option key={y} value={y}>
+                      Year {y}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Section *
+                </p>
+                <select
+                  value={addForm.section_id}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, section_id: e.target.value })
+                  }
+                  disabled={!addYear}
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                >
+                  <option value="">Select</option>
+                  {addSections.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      Section {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Parent Email
+                </p>
+                <input
+                  value={addForm.parent_email}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, parent_email: e.target.value })
+                  }
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Parent Telegram
+                </p>
+                <input
+                  value={addForm.parent_telegram}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, parent_telegram: e.target.value })
+                  }
+                  placeholder="@username"
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setAddOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAdd}
+                disabled={adding}
+                className="bg-primary hover:bg-primary/90"
+              >
+                {adding ? "Adding..." : "Add Student"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Import Modal */}
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display">
+              Bulk Import Students
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="p-4 bg-muted/30 rounded-lg text-sm text-muted-foreground space-y-2">
+              <p className="font-medium text-foreground">
+                CSV Format Required:
+              </p>
+              <p className="font-mono text-xs">
+                first_name, last_name, student_id, email, section_id,
+                parent_email, parent_telegram
+              </p>
+              <p>
+                The <span className="font-medium">section_id</span> column must
+                be the numeric ID of the section from the database.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Upload CSV File
+              </p>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleBulkImport}
+                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none"
+              />
+            </div>
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={() => setImportOpen(false)}>
+                Close
               </Button>
             </div>
           </div>

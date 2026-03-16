@@ -7,9 +7,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Shield, Pencil, Trash2 } from "lucide-react";
+import { Shield, Pencil, Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
-import axios from "@/api/axios";
+import {
+  getUsersApi,
+  createUserApi,
+  updateUserApi,
+  deleteUserApi,
+} from "@/api/axios";
 
 interface User {
   id: number;
@@ -28,9 +33,11 @@ const roleStyles: Record<string, string> = {
 const UserRolesTab = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Edit state
   const [editOpen, setEditOpen] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
-  const [form, setForm] = useState({
+  const [editForm, setEditForm] = useState({
     first_name: "",
     last_name: "",
     email: "",
@@ -38,54 +45,28 @@ const UserRolesTab = () => {
   });
   const [saving, setSaving] = useState(false);
 
+  // Add state
+  const [addOpen, setAddOpen] = useState(false);
+  const [addForm, setAddForm] = useState({
+    username: "",
+    first_name: "",
+    last_name: "",
+    email: "",
+    role: "teacher",
+    password: "",
+  });
+  const [adding, setAdding] = useState(false);
+
   useEffect(() => {
-    axios
-      .get("/users/")
-      .then((res) => {
-        setUsers(res.data);
-      })
-      .catch(() => {
-        setUsers([
-          {
-            id: 1,
-            username: "admin",
-            first_name: "Admin",
-            last_name: "",
-            email: "admin@eau.edu.et",
-            role: "admin",
-          },
-          {
-            id: 2,
-            username: "teacher1",
-            first_name: "Abebe",
-            last_name: "Girma",
-            email: "teacher1@eau.edu.et",
-            role: "teacher",
-          },
-          {
-            id: 3,
-            username: "teacher2",
-            first_name: "Mekdes",
-            last_name: "Tadesse",
-            email: "teacher2@eau.edu.et",
-            role: "teacher",
-          },
-          {
-            id: 4,
-            username: "teacher3",
-            first_name: "Dawit",
-            last_name: "Bekele",
-            email: "teacher3@eau.edu.et",
-            role: "teacher",
-          },
-        ]);
-      })
+    getUsersApi()
+      .then((res) => setUsers(res.data))
+      .catch(() => setUsers([]))
       .finally(() => setLoading(false));
   }, []);
 
   const openEdit = (user: User) => {
     setEditUser(user);
-    setForm({
+    setEditForm({
       first_name: user.first_name,
       last_name: user.last_name,
       email: user.email,
@@ -98,20 +79,53 @@ const UserRolesTab = () => {
     if (!editUser) return;
     setSaving(true);
     try {
-      await axios.patch(`/users/${editUser.id}/`, form);
+      await updateUserApi(editUser.id, editForm);
       setUsers((prev) =>
-        prev.map((u) => (u.id === editUser.id ? { ...u, ...form } : u)),
+        prev.map((u) => (u.id === editUser.id ? { ...u, ...editForm } : u)),
       );
       toast.success("User updated!");
       setEditOpen(false);
     } catch {
-      setUsers((prev) =>
-        prev.map((u) => (u.id === editUser.id ? { ...u, ...form } : u)),
-      );
-      toast.success("User updated!");
-      setEditOpen(false);
+      toast.error("Failed to update user");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm("Are you sure you want to delete this user?")) return;
+    try {
+      await deleteUserApi(id);
+      setUsers((prev) => prev.filter((u) => u.id !== id));
+      toast.success("User deleted!");
+    } catch {
+      toast.error("Failed to delete user");
+    }
+  };
+
+  const handleAdd = async () => {
+    if (!addForm.username || !addForm.email || !addForm.password) {
+      toast.error("Username, email and password are required");
+      return;
+    }
+    setAdding(true);
+    try {
+      const res = await createUserApi(addForm);
+      setUsers((prev) => [...prev, res.data]);
+      toast.success("User created!");
+      setAddOpen(false);
+      setAddForm({
+        username: "",
+        first_name: "",
+        last_name: "",
+        email: "",
+        role: "teacher",
+        password: "",
+      });
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || "Failed to create user");
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -119,9 +133,20 @@ const UserRolesTab = () => {
     <>
       <Card className="shadow-card border-border/50">
         <CardHeader className="pb-4">
-          <div className="flex items-center gap-2">
-            <Shield className="w-4 h-4 text-muted-foreground" />
-            <CardTitle className="font-display text-base">User Roles</CardTitle>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-muted-foreground" />
+              <CardTitle className="font-display text-base">
+                User Roles
+              </CardTitle>
+            </div>
+            <Button
+              size="sm"
+              className="gap-1.5 bg-primary hover:bg-primary/90"
+              onClick={() => setAddOpen(true)}
+            >
+              <Plus className="w-4 h-4" /> Add User
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -181,7 +206,7 @@ const UserRolesTab = () => {
                         <Pencil className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => toast.error("Delete coming soon!")}
+                        onClick={() => handleDelete(u.id)}
                         className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -195,6 +220,7 @@ const UserRolesTab = () => {
         </CardContent>
       </Card>
 
+      {/* Edit Modal */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -207,9 +233,9 @@ const UserRolesTab = () => {
                   First Name
                 </p>
                 <input
-                  value={form.first_name}
+                  value={editForm.first_name}
                   onChange={(e) =>
-                    setForm({ ...form, first_name: e.target.value })
+                    setEditForm({ ...editForm, first_name: e.target.value })
                   }
                   className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
                 />
@@ -219,9 +245,9 @@ const UserRolesTab = () => {
                   Last Name
                 </p>
                 <input
-                  value={form.last_name}
+                  value={editForm.last_name}
                   onChange={(e) =>
-                    setForm({ ...form, last_name: e.target.value })
+                    setEditForm({ ...editForm, last_name: e.target.value })
                   }
                   className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
                 />
@@ -232,8 +258,10 @@ const UserRolesTab = () => {
                 Email
               </p>
               <input
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                value={editForm.email}
+                onChange={(e) =>
+                  setEditForm({ ...editForm, email: e.target.value })
+                }
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
@@ -242,8 +270,10 @@ const UserRolesTab = () => {
                 Role
               </p>
               <select
-                value={form.role}
-                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                value={editForm.role}
+                onChange={(e) =>
+                  setEditForm({ ...editForm, role: e.target.value })
+                }
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
               >
                 <option value="admin">Admin</option>
@@ -260,6 +290,107 @@ const UserRolesTab = () => {
                 className="bg-primary hover:bg-primary/90"
               >
                 {saving ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add User Modal */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display">Add New User</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  First Name
+                </p>
+                <input
+                  value={addForm.first_name}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, first_name: e.target.value })
+                  }
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Last Name
+                </p>
+                <input
+                  value={addForm.last_name}
+                  onChange={(e) =>
+                    setAddForm({ ...addForm, last_name: e.target.value })
+                  }
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Username *
+              </p>
+              <input
+                value={addForm.username}
+                onChange={(e) =>
+                  setAddForm({ ...addForm, username: e.target.value })
+                }
+                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Email *
+              </p>
+              <input
+                value={addForm.email}
+                onChange={(e) =>
+                  setAddForm({ ...addForm, email: e.target.value })
+                }
+                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Password *
+              </p>
+              <input
+                type="password"
+                value={addForm.password}
+                onChange={(e) =>
+                  setAddForm({ ...addForm, password: e.target.value })
+                }
+                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Role *
+              </p>
+              <select
+                value={addForm.role}
+                onChange={(e) =>
+                  setAddForm({ ...addForm, role: e.target.value })
+                }
+                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="teacher">Teacher</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setAddOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAdd}
+                disabled={adding}
+                className="bg-primary hover:bg-primary/90"
+              >
+                {adding ? "Adding..." : "Add User"}
               </Button>
             </div>
           </div>

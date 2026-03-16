@@ -31,68 +31,81 @@ import {
   LogOut,
   Plus,
   Clock,
-  Filter,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import eauLogo from "@/assets/eau-logo.png";
 import {
+  getProgrammesApi,
+  getSectionsApi,
   getCoursesApi,
   getCourseStudentsApi,
-  submitAttendanceApi,
   getCourseSummaryApi,
+  submitAttendanceApi,
 } from "@/api/axios";
 
+interface Programme {
+  id: number;
+  name: string;
+  duration_years: number;
+}
+interface Section {
+  id: number;
+  name: string;
+  year: number;
+  semester: number;
+  academic_year: string;
+}
 interface Course {
   id: number;
   name: string;
   total_credit_hours: string;
-  minimum_required_hours: number;
   programme_name: string;
 }
-
 interface Student {
   id: number;
   full_name: string;
   student_id: string;
-  section_name: string;
 }
 
-type AttendanceStatus = "present" | "late" | "excused" | "absent";
-
-const statusStyles: Record<AttendanceStatus, string> = {
-  present: "bg-primary/10 text-primary border-primary/30",
-  late: "bg-secondary/20 text-secondary-foreground border-secondary/30",
-  excused: "bg-muted text-muted-foreground border-border",
-  absent: "bg-destructive/10 text-destructive border-destructive/30",
-};
+type AttendanceStatus = "present" | "late" | "excused" | "unexcused";
 
 const statusLabels: Record<AttendanceStatus, string> = {
   present: "Present",
   late: "Late",
   excused: "Excused",
-  absent: "Unexcused",
+  unexcused: "Unexcused",
 };
 
 const TeacherDashboard = () => {
   const { signOut, user } = useAuth();
+
+  // Selection state
+  const [programmes, setProgrammes] = useState<Programme[]>([]);
+  const [selectedProgramme, setSelectedProgramme] = useState("");
+  const [years, setYears] = useState<number[]>([]);
+  const [selectedYear, setSelectedYear] = useState("");
+  const [sections, setSections] = useState<Section[]>([]);
+  const [selectedSection, setSelectedSection] = useState("");
   const [courses, setCourses] = useState<Course[]>([]);
-  const [selectedCourse, setSelectedCourse] = useState<string>("");
+  const [selectedCourse, setSelectedCourse] = useState("");
+
+  // Data state
   const [students, setStudents] = useState<Student[]>([]);
   const [summary, setSummary] = useState<any[]>([]);
+
+  // Modal state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [shortName, setShortName] = useState(false);
-  const [selectedSection, setSelectedSection] = useState<string>("all");
-
-  // Attendance modal state
   const [attendanceDate, setAttendanceDate] = useState(
     format(new Date(), "yyyy-MM-dd"),
   );
+  const [sessionHours, setSessionHours] = useState("1.5");
+  const [sessionType, setSessionType] = useState("theory");
   const [attendanceMap, setAttendanceMap] = useState<
     Record<number, AttendanceStatus>
   >({});
-  const [sessionHours, setSessionHours] = useState("1.5");
+  const [shortName, setShortName] = useState(false);
   const [liveTime, setLiveTime] = useState(
     format(new Date(), "hh:mm:ss aa").toUpperCase(),
   );
@@ -105,39 +118,77 @@ const TeacherDashboard = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // Load programmes
   useEffect(() => {
-    getCoursesApi().then((res) => setCourses(res.data));
+    getProgrammesApi().then((res) => setProgrammes(res.data));
   }, []);
 
+  // When programme selected — build year list
   useEffect(() => {
-    if (!selectedCourse) return;
+    if (!selectedProgramme) return;
+    const prog = programmes.find((p) => p.id === parseInt(selectedProgramme));
+    if (prog) {
+      setYears(Array.from({ length: prog.duration_years }, (_, i) => i + 1));
+    }
+    setSelectedYear("");
+    setSelectedSection("");
+    setSelectedCourse("");
+    setSections([]);
+    setCourses([]);
+    setStudents([]);
+  }, [selectedProgramme]);
+
+  // When year selected — load sections
+  useEffect(() => {
+    if (!selectedProgramme || !selectedYear) return;
+    getSectionsApi({
+      programme: parseInt(selectedProgramme),
+      year: parseInt(selectedYear),
+      semester: 2,
+      academic_year: "2024/25",
+    }).then((res) => setSections(res.data));
+    setSelectedSection("");
+    setSelectedCourse("");
+    setCourses([]);
+    setStudents([]);
+  }, [selectedYear]);
+
+  // When section selected — load courses for this teacher
+  useEffect(() => {
+    if (!selectedSection || !selectedProgramme || !selectedYear) return;
+    getCoursesApi({
+      section: parseInt(selectedSection),
+      programme: parseInt(selectedProgramme),
+      year: parseInt(selectedYear),
+      semester: 2,
+    }).then((res) => setCourses(res.data));
+    setSelectedCourse("");
+    setStudents([]);
+  }, [selectedSection]);
+
+  // When course selected — load students and summary
+  useEffect(() => {
+    if (!selectedCourse || !selectedSection) return;
     const courseId = parseInt(selectedCourse);
+    const sectionId = parseInt(selectedSection);
     Promise.all([
-      getCourseStudentsApi(courseId),
-      getCourseSummaryApi(courseId),
-    ]).then(([studentsRes, summaryRes]) => {
-      setStudents(studentsRes.data.students);
-      setSummary(summaryRes.data.summary || []);
-      // Default all to present
+      getCourseStudentsApi(courseId, sectionId),
+      getCourseSummaryApi(courseId, sectionId),
+    ]).then(([studRes, sumRes]) => {
+      setStudents(studRes.data.students || []);
+      setSummary(sumRes.data.summary || []);
       const defaults: Record<number, AttendanceStatus> = {};
-      studentsRes.data.students.forEach((s: Student) => {
+      (studRes.data.students || []).forEach((s: Student) => {
         defaults[s.id] = "present";
       });
       setAttendanceMap(defaults);
     });
-  }, [selectedCourse]);
+  }, [selectedCourse, selectedSection]);
 
   const currentCourse = courses.find((c) => c.id === parseInt(selectedCourse));
-
-  // Get unique sections
-  const sections = Array.from(
-    new Set(students.map((s) => s.section_name)),
-  ).filter(Boolean);
-
-  const filteredStudents =
-    selectedSection === "all"
-      ? students
-      : students.filter((s) => s.section_name === selectedSection);
+  const currentSection = sections.find(
+    (s) => s.id === parseInt(selectedSection),
+  );
 
   const getDisplayName = (name: string) => {
     if (!shortName) return name;
@@ -145,12 +196,8 @@ const TeacherDashboard = () => {
     return parts.length > 1 ? `${parts[0]} ${parts[1].charAt(0)}.` : name;
   };
 
-  const handleStatusChange = (studentId: number, status: AttendanceStatus) => {
-    setAttendanceMap((prev) => ({ ...prev, [studentId]: status }));
-  };
-
   const handleSubmit = async () => {
-    if (!selectedCourse) return;
+    if (!selectedCourse || !selectedSection) return;
     setSubmitting(true);
     try {
       const records = students.map((s) => ({
@@ -159,16 +206,19 @@ const TeacherDashboard = () => {
       }));
       await submitAttendanceApi({
         course_id: parseInt(selectedCourse),
+        section_id: parseInt(selectedSection),
         date: attendanceDate,
-        session_type: "theory",
+        session_type: sessionType,
         session_hours: parseFloat(sessionHours),
         records,
       });
       toast.success("Attendance submitted successfully!");
       setDialogOpen(false);
-      // Refresh summary
-      const summaryRes = await getCourseSummaryApi(parseInt(selectedCourse));
-      setSummary(summaryRes.data.summary || []);
+      const sumRes = await getCourseSummaryApi(
+        parseInt(selectedCourse),
+        parseInt(selectedSection),
+      );
+      setSummary(sumRes.data.summary || []);
     } catch {
       toast.error("Failed to submit attendance.");
     } finally {
@@ -176,8 +226,7 @@ const TeacherDashboard = () => {
     }
   };
 
-  // Recent attendance from summary
-  const recentRecords = summary.slice(0, 8);
+  const isReadyToLog = selectedCourse && selectedSection && students.length > 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -187,43 +236,138 @@ const TeacherDashboard = () => {
           <img src={eauLogo} alt="EAU" className="h-10 object-contain" />
           <h1 className="font-display text-lg font-bold">Teacher Portal</h1>
         </div>
-        <Button variant="ghost" size="sm" onClick={signOut} className="gap-1.5">
-          <LogOut className="w-4 h-4" /> Sign Out
-        </Button>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground hidden sm:block">
+            {user?.first_name} {user?.last_name}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={signOut}
+            className="gap-1.5"
+          >
+            <LogOut className="w-4 h-4" /> Sign Out
+          </Button>
+        </div>
       </header>
 
       <main className="p-4 lg:p-6 max-w-6xl mx-auto space-y-6">
-        {/* Course selector + Log Attendance button */}
-        <div className="flex items-end gap-3 flex-wrap">
-          <div className="space-y-1">
-            <p className="text-xs text-muted-foreground font-medium">
-              Select Course
-            </p>
-            <Select value={selectedCourse} onValueChange={setSelectedCourse}>
-              <SelectTrigger className="w-64 border-primary/50 focus:ring-primary">
-                <SelectValue placeholder="Choose a course" />
-              </SelectTrigger>
-              <SelectContent>
-                {courses.map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {selectedCourse && (
-            <Button
-              className="gap-1.5 bg-primary hover:bg-primary/90"
-              onClick={() => setDialogOpen(true)}
-            >
-              <Plus className="w-4 h-4" /> Log Attendance
-            </Button>
-          )}
-        </div>
+        {/* Step-by-step selectors */}
+        <Card className="shadow-card border-border/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="font-display text-base">
+              Select Class
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* Programme */}
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Programme
+                </p>
+                <Select
+                  value={selectedProgramme}
+                  onValueChange={setSelectedProgramme}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select programme" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {programmes.map((p) => (
+                      <SelectItem key={p.id} value={String(p.id)}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Year */}
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Year
+                </p>
+                <Select
+                  value={selectedYear}
+                  onValueChange={setSelectedYear}
+                  disabled={!selectedProgramme}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select year" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {years.map((y) => (
+                      <SelectItem key={y} value={String(y)}>
+                        Year {y}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Section */}
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Section
+                </p>
+                <Select
+                  value={selectedSection}
+                  onValueChange={setSelectedSection}
+                  disabled={!selectedYear}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select section" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sections.map((s) => (
+                      <SelectItem key={s.id} value={String(s.id)}>
+                        Section {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Course */}
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Course
+                </p>
+                <Select
+                  value={selectedCourse}
+                  onValueChange={setSelectedCourse}
+                  disabled={!selectedSection || courses.length === 0}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select course" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {courses.map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {isReadyToLog && (
+              <div className="mt-4 flex justify-end">
+                <Button
+                  className="gap-1.5 bg-primary hover:bg-primary/90"
+                  onClick={() => setDialogOpen(true)}
+                >
+                  <Plus className="w-4 h-4" /> Log Attendance
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Stats */}
-        {selectedCourse && currentCourse && (
+        {isReadyToLog && currentCourse && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card className="shadow-card border-border/50">
               <CardContent className="p-4 flex items-center gap-3">
@@ -235,9 +379,7 @@ const TeacherDashboard = () => {
                     {students.length}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {sections[0]
-                      ? `${sections[0]} Students`
-                      : "Enrolled Students"}
+                    Section {currentSection?.name} Students
                   </p>
                 </div>
               </CardContent>
@@ -251,9 +393,7 @@ const TeacherDashboard = () => {
                   <p className="text-2xl font-display font-bold">
                     {summary.length}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    Records on {format(new Date(), "MMM d")}
-                  </p>
+                  <p className="text-xs text-muted-foreground">Total Records</p>
                 </div>
               </CardContent>
             </Card>
@@ -273,48 +413,30 @@ const TeacherDashboard = () => {
           </div>
         )}
 
-        {/* Student Roster + Recent Attendance */}
-        {selectedCourse && (
+        {/* Student Roster + Attendance Summary */}
+        {isReadyToLog && (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            {/* Student Roster */}
             <Card className="shadow-card border-border/50">
               <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="font-display text-base">
-                    Student Roster
-                  </CardTitle>
-                  {sections.length > 0 && (
-                    <Select
-                      value={selectedSection}
-                      onValueChange={setSelectedSection}
-                    >
-                      <SelectTrigger className="w-32 h-8 text-xs gap-1">
-                        <Filter className="w-3 h-3" />
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Sections</SelectItem>
-                        {sections.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            {s}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
+                <CardTitle className="font-display text-base">
+                  Student Roster
+                </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead>#</TableHead>
                       <TableHead>Name</TableHead>
                       <TableHead>University ID</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredStudents.map((s) => (
+                    {students.map((s, i) => (
                       <TableRow key={s.id}>
+                        <TableCell className="text-muted-foreground">
+                          {i + 1}
+                        </TableCell>
                         <TableCell className="font-medium">
                           {s.full_name}
                         </TableCell>
@@ -323,10 +445,10 @@ const TeacherDashboard = () => {
                         </TableCell>
                       </TableRow>
                     ))}
-                    {filteredStudents.length === 0 && (
+                    {students.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={2}
+                          colSpan={3}
                           className="text-center text-muted-foreground py-8"
                         >
                           No students found
@@ -338,18 +460,11 @@ const TeacherDashboard = () => {
               </CardContent>
             </Card>
 
-            {/* Recent Attendance */}
             <Card className="shadow-card border-border/50">
               <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="font-display text-base">
-                    Recent Attendance
-                  </CardTitle>
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground border border-border rounded-lg px-2 py-1">
-                    <Clock className="w-3 h-3" />
-                    {format(new Date(), "MMM d, yyyy")}
-                  </div>
-                </div>
+                <CardTitle className="font-display text-base">
+                  Attendance Summary
+                </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <Table>
@@ -361,7 +476,7 @@ const TeacherDashboard = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {recentRecords.map((row: any) => (
+                    {summary.slice(0, 10).map((row: any) => (
                       <TableRow key={row.student.id}>
                         <TableCell className="font-medium text-sm">
                           {row.student.full_name}
@@ -374,10 +489,10 @@ const TeacherDashboard = () => {
                             variant="outline"
                             className={`text-xs ${
                               row.status === "safe"
-                                ? statusStyles.present
+                                ? "bg-primary/10 text-primary border-primary/30"
                                 : row.status === "warning"
-                                  ? statusStyles.late
-                                  : statusStyles.absent
+                                  ? "bg-secondary/20 text-secondary-foreground border-secondary/30"
+                                  : "bg-destructive/10 text-destructive border-destructive/30"
                             }`}
                           >
                             {row.status === "safe"
@@ -389,7 +504,7 @@ const TeacherDashboard = () => {
                         </TableCell>
                       </TableRow>
                     ))}
-                    {recentRecords.length === 0 && (
+                    {summary.length === 0 && (
                       <TableRow>
                         <TableCell
                           colSpan={3}
@@ -407,14 +522,14 @@ const TeacherDashboard = () => {
         )}
 
         {/* Empty state */}
-        {!selectedCourse && (
+        {!isReadyToLog && (
           <div className="text-center py-20 text-muted-foreground">
             <BookOpen className="w-12 h-12 mx-auto mb-4 opacity-30" />
             <p className="font-display text-lg">
-              Select a course to get started
+              Select a class to get started
             </p>
             <p className="text-sm mt-1">
-              Choose a course above to view students and log attendance
+              Choose programme → year → section → course above
             </p>
           </div>
         )}
@@ -430,7 +545,7 @@ const TeacherDashboard = () => {
                   Log Attendance
                 </DialogTitle>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  {currentCourse?.name}
+                  {currentCourse?.name} — Section {currentSection?.name}
                 </p>
               </div>
               <div className="flex items-center gap-1.5 bg-muted px-3 py-1.5 rounded-lg text-sm font-mono">
@@ -441,35 +556,29 @@ const TeacherDashboard = () => {
           </DialogHeader>
 
           <div className="space-y-4 pt-2">
-            {/* Date + Section + Short Name toggle */}
             <div className="flex items-end gap-4 flex-wrap">
               <div className="space-y-1">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Date
                 </p>
-                <div className="flex items-center gap-2 border border-input rounded-lg px-3 py-2 text-sm">
-                  <input
-                    type="date"
-                    value={attendanceDate}
-                    onChange={(e) => setAttendanceDate(e.target.value)}
-                    className="bg-transparent outline-none"
-                  />
-                </div>
+                <input
+                  type="date"
+                  value={attendanceDate}
+                  onChange={(e) => setAttendanceDate(e.target.value)}
+                  className="border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                />
               </div>
               <div className="space-y-1">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Section / Class
+                  Session Type
                 </p>
-                <Select defaultValue={sections[0] || "A"}>
-                  <SelectTrigger className="w-36">
+                <Select value={sessionType} onValueChange={setSessionType}>
+                  <SelectTrigger className="w-32">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {sections.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s}
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="theory">Theory</SelectItem>
+                    <SelectItem value="practical">Practical</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -493,20 +602,15 @@ const TeacherDashboard = () => {
                 </span>
                 <button
                   onClick={() => setShortName(!shortName)}
-                  className={`relative w-10 h-5 rounded-full transition-colors ${
-                    shortName ? "bg-primary" : "bg-muted-foreground/30"
-                  }`}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${shortName ? "bg-primary" : "bg-muted-foreground/30"}`}
                 >
                   <span
-                    className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      shortName ? "translate-x-5" : "translate-x-0.5"
-                    }`}
+                    className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${shortName ? "translate-x-5" : "translate-x-0.5"}`}
                   />
                 </button>
               </div>
             </div>
 
-            {/* Student attendance table */}
             <div className="border border-border rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 border-b border-border">
@@ -515,13 +619,13 @@ const TeacherDashboard = () => {
                       #
                     </th>
                     <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase">
-                      Student Name
+                      Student
                     </th>
                     <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase">
-                      University ID
+                      ID
                     </th>
                     <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase">
-                      Attendance Status
+                      Status
                     </th>
                   </tr>
                 </thead>
@@ -531,40 +635,43 @@ const TeacherDashboard = () => {
                       <td className="px-4 py-3 text-muted-foreground">
                         {index + 1}
                       </td>
-                      <td className="px-4 py-3 font-medium whitespace-nowrap">
+                      <td className="px-4 py-3 font-medium">
                         {getDisplayName(student.full_name)}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground font-mono text-xs">
                         {student.student_id}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex gap-1.5">
+                        <div className="flex gap-1.5 flex-wrap">
                           {(
                             [
                               "present",
                               "late",
                               "excused",
-                              "absent",
+                              "unexcused",
                             ] as AttendanceStatus[]
-                          ).map((status) => (
+                          ).map((s) => (
                             <button
-                              key={status}
+                              key={s}
                               onClick={() =>
-                                handleStatusChange(student.id, status)
+                                setAttendanceMap((prev) => ({
+                                  ...prev,
+                                  [student.id]: s,
+                                }))
                               }
                               className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
-                                attendanceMap[student.id] === status
-                                  ? status === "present"
+                                attendanceMap[student.id] === s
+                                  ? s === "present"
                                     ? "bg-primary text-primary-foreground border-primary"
-                                    : status === "late"
+                                    : s === "late"
                                       ? "bg-secondary text-secondary-foreground border-secondary"
-                                      : status === "excused"
-                                        ? "bg-muted text-muted-foreground border-border"
+                                      : s === "excused"
+                                        ? "bg-muted text-foreground border-border"
                                         : "bg-destructive text-destructive-foreground border-destructive"
                                   : "bg-background text-muted-foreground border-border hover:bg-muted"
                               }`}
                             >
-                              {statusLabels[status]}
+                              {statusLabels[s]}
                             </button>
                           ))}
                         </div>
@@ -575,13 +682,12 @@ const TeacherDashboard = () => {
               </table>
             </div>
 
-            {/* Footer */}
             <div className="flex items-center justify-between pt-2">
               <p className="text-sm text-muted-foreground">
                 <span className="text-primary font-medium">
                   {students.length}
                 </span>{" "}
-                students in {sections[0] || "Section A"}
+                students in Section {currentSection?.name}
               </p>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setDialogOpen(false)}>

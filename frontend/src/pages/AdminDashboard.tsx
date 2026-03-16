@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@/hooks/useAuth";
 import AdminSidebar from "@/components/admin/AdminSidebar";
 import AdminHeader from "@/components/admin/AdminHeader";
 import StatsCards from "@/components/admin/StatsCards";
@@ -16,9 +15,11 @@ import UserRolesTab from "@/components/admin/UserRolesTab";
 import SettingsTab from "@/components/admin/SettingsTab";
 import {
   getCoursesApi,
-  getCourseSummaryApi,
+  getStudentsApi,
+  getAttendanceApi,
   getNotificationsApi,
   markNotificationReadApi,
+  getProgrammesApi,
 } from "@/api/axios";
 
 const tabTitles: Record<string, string> = {
@@ -36,18 +37,18 @@ const tabTitles: Record<string, string> = {
 export interface Course {
   id: number;
   name: string;
+  code: string;
   total_credit_hours: string;
   minimum_required_hours: number;
   programme_name: string;
+  year: number;
+  semester: number;
 }
 
-export interface SummaryStudent {
-  student: { id: number; full_name: string; student_id: string };
-  attended_hours: number;
-  missed_hours: number;
-  attendance_percentage: number;
-  minimum_required_hours: number;
-  status: "safe" | "warning" | "at_risk";
+export interface Programme {
+  id: number;
+  name: string;
+  duration_years: number;
 }
 
 export interface Notification {
@@ -62,35 +63,45 @@ const AdminDashboard = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
-  const [summary, setSummary] = useState<SummaryStudent[]>([]);
+  const [programmes, setProgrammes] = useState<Programme[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [totalStudents, setTotalStudents] = useState(0);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [atRiskCount, setAtRiskCount] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getCoursesApi().then((res) => {
-      setCourses(res.data);
-      if (res.data.length > 0) setSelectedCourse(res.data[0]);
-    });
-    getNotificationsApi().then((res) =>
-      setNotifications(res.data.notifications),
-    );
+    const fetchData = async () => {
+      try {
+        const [coursesRes, studentsRes, notifRes, programmesRes] =
+          await Promise.all([
+            getCoursesApi(),
+            getStudentsApi(),
+            getNotificationsApi(),
+            getProgrammesApi(),
+          ]);
+
+        setCourses(coursesRes.data);
+        setProgrammes(programmesRes.data);
+        setTotalStudents(studentsRes.data.length);
+        setNotifications(notifRes.data.notifications || []);
+
+        // Get attendance records count
+        const attendanceRes = await getAttendanceApi();
+        setTotalRecords(attendanceRes.data.length);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
   }, []);
-
-  useEffect(() => {
-    if (!selectedCourse) return;
-    getCourseSummaryApi(selectedCourse.id).then((res) => {
-      setSummary(res.data.summary);
-    });
-  }, [selectedCourse]);
 
   const handleMarkRead = async (id: number) => {
     await markNotificationReadApi(id);
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   };
-
-  const atRisk = summary.filter((s) => s.status === "at_risk");
-  const warning = summary.filter((s) => s.status === "warning");
-  const safe = summary.filter((s) => s.status === "safe");
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -137,39 +148,38 @@ const AdminDashboard = () => {
           {activeTab === "overview" && (
             <>
               <StatsCards
-                totalStudents={summary.length}
+                totalStudents={totalStudents}
                 totalCourses={courses.length}
-                atRiskCount={atRisk.length}
-                totalRecords={summary.reduce(
-                  (acc, s) => acc + Number(s.attended_hours),
-                  0,
-                )}
+                atRiskCount={atRiskCount}
+                totalRecords={totalRecords}
               />
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <div className="xl:col-span-2">
                   <AttendanceChart />
                 </div>
-                <StatusDistribution
-                  safe={safe.length}
-                  warning={warning.length}
-                  atRisk={atRisk.length}
-                />
+                <StatusDistribution safe={0} warning={0} atRisk={atRiskCount} />
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <div className="xl:col-span-2">
-                  <AtRiskTable students={[...atRisk, ...warning]} />
+                  <AtRiskTable students={[]} />
                 </div>
                 <RecentActivity notifications={notifications} />
               </div>
             </>
           )}
 
-          {activeTab === "students" && <StudentsTab />}
-          {activeTab === "courses" && <CoursesTab courses={courses} />}
-          {activeTab === "attendance" && <AttendanceTab />}
-          {activeTab === "at-risk" && (
-            <AtRiskTable students={[...atRisk, ...warning]} fullPage />
+          {activeTab === "students" && <StudentsTab programmes={programmes} />}
+          {activeTab === "courses" && (
+            <CoursesTab
+              courses={courses}
+              programmes={programmes}
+              onCoursesChange={setCourses}
+            />
           )}
+          {activeTab === "attendance" && (
+            <AttendanceTab courses={courses} programmes={programmes} />
+          )}
+          {activeTab === "at-risk" && <AtRiskTable students={[]} fullPage />}
           {activeTab === "user-roles" && <UserRolesTab />}
           {activeTab === "reports" && <ReportsTab courses={courses} />}
           {activeTab === "notifications" && (

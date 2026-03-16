@@ -1,6 +1,23 @@
+from decimal import Decimal
+
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MinValueValidator
+from django.utils import timezone
+
+
+def get_current_semester():
+    month = timezone.now().month
+    # Sep-Jan = Semester 1, Feb-Aug = Semester 2
+    return 1 if month >= 9 or month == 1 else 2
+
+
+def get_current_academic_year():
+    now = timezone.now()
+    if now.month >= 9:
+        return f"{now.year}/{str(now.year + 1)[2:]}"
+    else:
+        return f"{now.year - 1}/{str(now.year)[2:]}"
 
 
 class User(AbstractUser):
@@ -34,6 +51,7 @@ class Department(models.Model):
 
 class Programme(models.Model):
     name = models.CharField(max_length=100)
+    duration_years = models.IntegerField(default=4)  # 4 or 5
     department = models.ForeignKey(
         Department,
         on_delete=models.CASCADE,
@@ -46,11 +64,14 @@ class Programme(models.Model):
 
 class Course(models.Model):
     name = models.CharField(max_length=100)
+    code = models.CharField(max_length=20, blank=True, default='')
     programme = models.ForeignKey(
         Programme,
         on_delete=models.CASCADE,
         related_name='courses'
     )
+    year = models.IntegerField(default=1)       # which year this course is taught
+    semester = models.IntegerField(default=1)   # which semester
     total_credit_hours = models.DecimalField(
         max_digits=5,
         decimal_places=1,
@@ -60,13 +81,53 @@ class Course(models.Model):
     @property
     def minimum_required_hours(self):
         from decimal import Decimal
-        return self.total_credit_hours * Decimal('0.15')
+        return Decimal(str(self.total_credit_hours)) * Decimal('0.15')
 
     def __str__(self):
-        return self.name
+        return f"{self.name} (Year {self.year} Sem {self.semester})"
+
+
+class Section(models.Model):
+    """
+    A section is a group of students in a specific
+    programme, year, semester and academic year.
+    e.g. BSc Aeronautical Eng, Year 2, Semester 2, Section A, 2024/25
+    """
+    SECTION_CHOICES = (
+        ('A', 'Section A'),
+        ('B', 'Section B'),
+        ('C', 'Section C'),
+        ('D', 'Section D'),
+    )
+    name = models.CharField(max_length=5, choices=SECTION_CHOICES)
+    programme = models.ForeignKey(
+        Programme,
+        on_delete=models.CASCADE,
+        related_name='sections'
+    )
+    year = models.IntegerField()        # 1, 2, 3, 4, 5
+    semester = models.IntegerField()    # 1 or 2
+    academic_year = models.CharField(
+        max_length=10,
+        default=get_current_academic_year
+    )
+
+    class Meta:
+        unique_together = ('name', 'programme', 'year', 'semester', 'academic_year')
+
+    def __str__(self):
+        return (
+            f"{self.programme.name} — "
+            f"Year {self.year} Sem {self.semester} "
+            f"Section {self.name} ({self.academic_year})"
+        )
 
 
 class CourseAssignment(models.Model):
+    """
+    A teacher is assigned to teach a specific course
+    to a specific section.
+    """
     ROLE_CHOICES = (
         ('professor', 'Professor'),
         ('pip', 'PIP / Lab Instructor'),
@@ -81,26 +142,21 @@ class CourseAssignment(models.Model):
         on_delete=models.CASCADE,
         related_name='course_assignments'
     )
+    section = models.ForeignKey(
+        Section,
+        on_delete=models.CASCADE,
+        related_name='course_assignments',
+        null=True,
+        blank=True
+    )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
     credit_hours = models.DecimalField(max_digits=5, decimal_places=1)
 
     class Meta:
-        unique_together = ('course', 'teacher', 'role')
+        unique_together = ('course', 'teacher', 'section', 'role')
 
     def __str__(self):
-        return f"{self.teacher} - {self.course} ({self.role})"
-
-
-class Section(models.Model):
-    name = models.CharField(max_length=20)
-    course = models.ForeignKey(
-        Course,
-        on_delete=models.CASCADE,
-        related_name='sections'
-    )
-
-    def __str__(self):
-        return f"{self.course.name} - Section {self.name}"
+        return f"{self.teacher} — {self.course} — {self.section} ({self.role})"
 
 
 class Student(models.Model):
@@ -108,7 +164,8 @@ class Student(models.Model):
     last_name = models.CharField(max_length=50)
     student_id = models.CharField(max_length=20, unique=True)
     email = models.EmailField(unique=True)
-    parent_email = models.EmailField()
+    parent_email = models.EmailField(blank=True, default='')
+    parent_telegram = models.CharField(max_length=100, blank=True, default='')
     section = models.ForeignKey(
         Section,
         on_delete=models.CASCADE,
@@ -120,13 +177,15 @@ class Student(models.Model):
         return f"{self.first_name} {self.last_name}"
 
     def __str__(self):
-        return self.full_name
+        return f"{self.full_name} ({self.student_id})"
 
 
 class AttendanceRecord(models.Model):
     STATUS_CHOICES = (
         ('present', 'Present'),
-        ('absent', 'Absent'),
+        ('late', 'Late'),
+        ('excused', 'Excused'),
+        ('unexcused', 'Unexcused'),
     )
     SESSION_TYPE_CHOICES = (
         ('theory', 'Theory'),
@@ -149,7 +208,7 @@ class AttendanceRecord(models.Model):
         choices=SESSION_TYPE_CHOICES,
         default='theory'
     )
-    session_hours = models.DecimalField(
+    hours_attended = models.DecimalField(
         max_digits=4,
         decimal_places=1,
         default=1.0
@@ -165,7 +224,7 @@ class AttendanceRecord(models.Model):
         unique_together = ('student', 'course', 'date', 'session_type')
 
     def __str__(self):
-        return f"{self.student} - {self.course} - {self.date} - {self.status}"
+        return f"{self.student} — {self.course} — {self.date} — {self.status}"
 
 
 class Notification(models.Model):
@@ -177,7 +236,9 @@ class Notification(models.Model):
     recipient = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
-        related_name='notifications'
+        related_name='notifications',
+        null=True,
+        blank=True
     )
     notification_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     message = models.TextField()
@@ -188,4 +249,31 @@ class Notification(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"{self.recipient} - {self.notification_type}"
+        return f"{self.recipient} — {self.notification_type}"
+
+
+class SystemSettings(models.Model):
+    email_alerts_enabled = models.BooleanField(default=True)
+    telegram_alerts_enabled = models.BooleanField(default=False)
+    threshold_warnings_enabled = models.BooleanField(default=True)
+    weekly_reports_enabled = models.BooleanField(default=False)
+    current_semester = models.IntegerField(default=get_current_semester)
+    current_academic_year = models.CharField(
+        max_length=10,
+        default=get_current_academic_year
+    )
+
+    class Meta:
+        verbose_name = "System Settings"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1  # singleton
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return "System Settings"

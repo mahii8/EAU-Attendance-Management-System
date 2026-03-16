@@ -10,128 +10,329 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import axios from "@/api/axios";
+import {
+  getProgrammesApi,
+  getSectionsApi,
+  getCoursesApi,
+  getCourseSummaryApi,
+  getAttendanceApi,
+} from "@/api/axios";
+import { format, startOfWeek, endOfWeek } from "date-fns";
 
-const CustomXAxisTick = ({ x, y, payload }: any) => {
-  const [hovered, setHovered] = useState(false);
-  const fullName = payload.fullName || payload.value;
-
-  return (
-    <g transform={`translate(${x},${y})`}>
-      <text
-        x={0}
-        y={0}
-        dy={16}
-        textAnchor="middle"
-        fill={hovered ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))"}
-        fontSize={11}
-        style={{ cursor: "pointer", transition: "fill 0.2s" }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
-        {payload.value}
-      </text>
-      {hovered && (
-        <g>
-          <rect
-            x={-70}
-            y={24}
-            width={140}
-            height={24}
-            rx={4}
-            fill="hsl(var(--foreground))"
-            opacity={0.9}
-          />
-          <text
-            x={0}
-            y={40}
-            textAnchor="middle"
-            fill="hsl(var(--background))"
-            fontSize={11}
-            fontWeight={500}
-          >
-            {fullName}
-          </text>
-        </g>
-      )}
-    </g>
-  );
-};
+interface Programme {
+  id: number;
+  name: string;
+  duration_years: number;
+}
+interface Section {
+  id: number;
+  name: string;
+  year: number;
+}
 
 const AttendanceChart = () => {
   const [chartData, setChartData] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [programmes, setProgrammes] = useState<Programme[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
+  const [filterProgramme, setFilterProgramme] = useState("");
+  const [filterSection, setFilterSection] = useState("");
+  const [years, setYears] = useState<number[]>([]);
+  const [filterYear, setFilterYear] = useState("2");
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // Date range — default to current week
+  const [startDate, setStartDate] = useState(
+    format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"),
+  );
+  const [endDate, setEndDate] = useState(
+    format(endOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"),
+  );
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const coursesRes = await axios.get("/courses/");
-        const courses = coursesRes.data;
-
-        const data = await Promise.all(
-          courses.map(async (course: any) => {
-            const summaryRes = await axios.get(
-              `/courses/${course.id}/summary/`,
-            );
-            const summary = summaryRes.data.summary || [];
-
-            const present = summary.filter(
-              (s: any) => s.status === "safe",
-            ).length;
-            const warning = summary.filter(
-              (s: any) => s.status === "warning",
-            ).length;
-            const atRisk = summary.filter(
-              (s: any) => s.status === "at_risk",
-            ).length;
-
-            return {
-              name:
-                course.name.length > 10
-                  ? course.name.substring(0, 10) + "..."
-                  : course.name,
-              fullName: course.name,
-              Present: present,
-              Warning: warning,
-              "At Risk": atRisk,
-            };
-          }),
-        );
-
-        setChartData(data);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
+    getProgrammesApi().then((res) => {
+      setProgrammes(res.data);
+      if (res.data.length > 0) {
+        setFilterProgramme(String(res.data[0].id));
       }
-    };
-
-    fetchData();
+    });
   }, []);
 
-  const renderCustomTick = (props: any) => {
-    const fullName = chartData.find(
-      (d) => d.name === props.payload.value,
-    )?.fullName;
+  useEffect(() => {
+    if (!filterProgramme) return;
+    const prog = programmes.find((p) => p.id === parseInt(filterProgramme));
+    if (prog)
+      setYears(Array.from({ length: prog.duration_years }, (_, i) => i + 1));
+    getSectionsApi({
+      programme: parseInt(filterProgramme),
+      year: parseInt(filterYear),
+      semester: 2,
+      academic_year: "2024/25",
+    }).then((res) => {
+      setSections(res.data);
+      setFilterSection("");
+    });
+  }, [filterProgramme, filterYear]);
+
+  useEffect(() => {
+    if (!filterProgramme) return;
+    fetchChartData();
+  }, [filterProgramme, filterYear, filterSection, startDate, endDate]);
+
+  const fetchChartData = async () => {
+    setLoading(true);
+    try {
+      const params: any = {
+        programme: filterProgramme,
+        year: filterYear,
+        semester: 2,
+      };
+      if (filterSection) params.section = filterSection;
+
+      const coursesRes = await getCoursesApi(params);
+      const courses = coursesRes.data.slice(0, 8);
+
+      const data = await Promise.all(
+        courses.map(async (course: any) => {
+          // Get attendance records for this course in the date range
+          const attendanceParams: any = {
+            course: course.id,
+          };
+          if (filterSection) attendanceParams.section = filterSection;
+
+          const attendanceRes = await getAttendanceApi(attendanceParams);
+          const records = attendanceRes.data.filter((r: any) => {
+            const d = r.date;
+            return d >= startDate && d <= endDate;
+          });
+
+          const present = records.filter(
+            (r: any) => r.status === "present",
+          ).length;
+          const late = records.filter((r: any) => r.status === "late").length;
+          const excused = records.filter(
+            (r: any) => r.status === "excused",
+          ).length;
+          const unexcused = records.filter(
+            (r: any) => r.status === "unexcused",
+          ).length;
+
+          return {
+            name:
+              course.name.length > 12
+                ? course.name.substring(0, 12) + "..."
+                : course.name,
+            fullName: course.name,
+            Present: present,
+            Late: late,
+            Excused: excused,
+            Unexcused: unexcused,
+          };
+        }),
+      );
+      setChartData(
+        data.filter((d) => d.Present + d.Late + d.Excused + d.Unexcused > 0),
+      );
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const setCurrentWeek = () => {
+    setStartDate(
+      format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"),
+    );
+    setEndDate(
+      format(endOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"),
+    );
+    setShowDatePicker(false);
+  };
+
+  const setLastWeek = () => {
+    const lastWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    const lastWeekEnd = endOfWeek(lastWeekStart, { weekStartsOn: 1 });
+    setStartDate(format(lastWeekStart, "yyyy-MM-dd"));
+    setEndDate(format(lastWeekEnd, "yyyy-MM-dd"));
+    setShowDatePicker(false);
+  };
+
+  const CustomXAxisTick = ({ x, y, payload }: any) => {
+    const [hovered, setHovered] = useState(false);
+    const fullName = chartData.find((d) => d.name === payload.value)?.fullName;
     return (
-      <CustomXAxisTick {...props} payload={{ ...props.payload, fullName }} />
+      <g transform={`translate(${x},${y})`}>
+        <text
+          x={0}
+          y={0}
+          dy={16}
+          textAnchor="middle"
+          fill={
+            hovered ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))"
+          }
+          fontSize={11}
+          style={{ cursor: "pointer", transition: "fill 0.2s" }}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        >
+          {payload.value}
+        </text>
+        {hovered && (
+          <g>
+            <rect
+              x={-70}
+              y={24}
+              width={140}
+              height={24}
+              rx={4}
+              fill="hsl(var(--foreground))"
+              opacity={0.9}
+            />
+            <text
+              x={0}
+              y={40}
+              textAnchor="middle"
+              fill="hsl(var(--background))"
+              fontSize={11}
+              fontWeight={500}
+            >
+              {fullName}
+            </text>
+          </g>
+        )}
+      </g>
     );
   };
+
+  const dateRangeLabel = `${format(new Date(startDate), "MMM d")} – ${format(new Date(endDate), "MMM d, yyyy")}`;
 
   return (
     <Card className="shadow-card border-border/50">
       <CardHeader className="pb-2">
-        <CardTitle className="font-display text-base">
-          Attendance Status by Course
-        </CardTitle>
+        <div className="flex items-start justify-between flex-wrap gap-2">
+          <div>
+            <CardTitle className="font-display text-base">
+              Attendance Status by Course
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {dateRangeLabel}
+            </p>
+          </div>
+          <div className="flex gap-2 flex-wrap items-center">
+            {/* Programme filter */}
+            <select
+              value={filterProgramme}
+              onChange={(e) => setFilterProgramme(e.target.value)}
+              className="border border-input rounded-lg px-2 py-1 text-xs bg-background outline-none focus:ring-2 focus:ring-ring"
+            >
+              {programmes.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name.replace("BSc ", "")}
+                </option>
+              ))}
+            </select>
+
+            {/* Year filter */}
+            <select
+              value={filterYear}
+              onChange={(e) => setFilterYear(e.target.value)}
+              className="border border-input rounded-lg px-2 py-1 text-xs bg-background outline-none focus:ring-2 focus:ring-ring"
+            >
+              {years.map((y) => (
+                <option key={y} value={y}>
+                  Year {y}
+                </option>
+              ))}
+            </select>
+
+            {/* Section filter */}
+            <select
+              value={filterSection}
+              onChange={(e) => setFilterSection(e.target.value)}
+              className="border border-input rounded-lg px-2 py-1 text-xs bg-background outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">All Sections</option>
+              {sections.map((s) => (
+                <option key={s.id} value={s.id}>
+                  Section {s.name}
+                </option>
+              ))}
+            </select>
+
+            {/* Date range picker */}
+            <div className="relative">
+              <button
+                onClick={() => setShowDatePicker(!showDatePicker)}
+                className="flex items-center gap-1.5 border border-input rounded-lg px-2 py-1 text-xs bg-background hover:bg-muted transition-colors"
+              >
+                📅 {dateRangeLabel}
+              </button>
+
+              {showDatePicker && (
+                <div className="absolute right-0 top-8 z-50 bg-card border border-border rounded-xl shadow-lg p-4 w-72">
+                  <div className="flex gap-2 mb-3">
+                    <button
+                      onClick={setCurrentWeek}
+                      className="flex-1 text-xs py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors font-medium"
+                    >
+                      This Week
+                    </button>
+                    <button
+                      onClick={setLastWeek}
+                      className="flex-1 text-xs py-1.5 rounded-lg bg-muted hover:bg-muted/80 transition-colors font-medium"
+                    >
+                      Last Week
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        From
+                      </p>
+                      <input
+                        type="date"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="w-full border border-input rounded-lg px-3 py-1.5 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        To
+                      </p>
+                      <input
+                        type="date"
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        className="w-full border border-input rounded-lg px-3 py-1.5 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </div>
+                    <button
+                      onClick={() => setShowDatePicker(false)}
+                      className="w-full mt-1 text-xs py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         {loading ? (
           <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
             Loading chart...
           </div>
+        ) : chartData.length === 0 ? (
+          <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+            No attendance data for selected period
+          </div>
         ) : (
-          <ResponsiveContainer width="100%" height={340}>
+          <ResponsiveContainer width="100%" height={320}>
             <BarChart
               data={chartData}
               margin={{ top: 5, right: 10, left: -20, bottom: 40 }}
@@ -140,7 +341,11 @@ const AttendanceChart = () => {
                 strokeDasharray="3 3"
                 stroke="hsl(var(--border))"
               />
-              <XAxis dataKey="name" tick={renderCustomTick} interval={0} />
+              <XAxis
+                dataKey="name"
+                tick={(props) => <CustomXAxisTick {...props} />}
+                interval={0}
+              />
               <YAxis
                 tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
                 allowDecimals={false}
@@ -152,30 +357,21 @@ const AttendanceChart = () => {
                   borderRadius: "8px",
                   fontSize: "12px",
                 }}
-                formatter={(value, name, props) => [
-                  value,
-                  props.payload.fullName ? `${name}` : name,
-                ]}
               />
-              <Legend
-                wrapperStyle={{
-                  fontSize: "12px",
-                  paddingTop: "32px",
-                  marginTop: "16px",
-                }}
-              />
+              <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "32px" }} />
               <Bar
                 dataKey="Present"
                 fill="hsl(var(--primary))"
                 radius={[4, 4, 0, 0]}
               />
               <Bar
-                dataKey="Warning"
+                dataKey="Late"
                 fill="hsl(var(--secondary))"
                 radius={[4, 4, 0, 0]}
               />
+              <Bar dataKey="Excused" fill="#94a3b8" radius={[4, 4, 0, 0]} />
               <Bar
-                dataKey="At Risk"
+                dataKey="Unexcused"
                 fill="hsl(var(--destructive))"
                 radius={[4, 4, 0, 0]}
               />
