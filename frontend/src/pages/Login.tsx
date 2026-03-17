@@ -24,13 +24,20 @@ const Login = () => {
     setLoading(true);
     try {
       await login(username, password);
-      const role = localStorage.getItem("user_role");
-      toast.success("Logged in successfully");
-      if (role === "admin") {
-        window.location.href = "/admin";
-      } else {
-        window.location.href = "/teacher";
-      }
+      // Wait a moment for context state to settle before reading localStorage
+      setTimeout(() => {
+        const role = localStorage.getItem("user_role");
+        toast.success("Logged in successfully");
+        if (role === "admin") {
+          window.location.href = "/admin";
+        } else if (role === "student") {
+          window.location.href = "/student";
+        } else if (role === "parent") {
+          window.location.href = "/parent";
+        } else {
+          window.location.href = "/teacher";
+        }
+      }, 100);
     } catch (err: any) {
       toast.error("Invalid username or password");
     } finally {

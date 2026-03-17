@@ -37,7 +37,7 @@ const StatsCards = ({ totalStudents, totalCourses, atRiskCount, totalRecords }: 
     {
       label: "At-Risk Students",
       value: atRiskCount,
-      change: "with unexcused absences",
+      change: "with absences exceeding threshold",
       changeType: atRiskCount > 0 ? "negative" as const : "positive" as const,
       icon: AlertTriangle,
       color: "bg-destructive/10 text-destructive",

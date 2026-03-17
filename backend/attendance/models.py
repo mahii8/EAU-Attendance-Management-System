@@ -24,12 +24,16 @@ class User(AbstractUser):
     ROLE_CHOICES = (
         ('teacher', 'Teacher'),
         ('admin', 'Admin'),
+        ('student', 'Student'),
+        ('parent', 'Parent'),
     )
     role = models.CharField(
         max_length=10,
         choices=ROLE_CHOICES,
         default='teacher'
     )
+    title = models.CharField(max_length=20, blank=True, default='')
+    has_logged_in_before = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.get_full_name()} ({self.role})"
@@ -171,6 +175,20 @@ class Student(models.Model):
         on_delete=models.CASCADE,
         related_name='students'
     )
+    user = models.OneToOneField(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='student_profile'
+    )
+    parent_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='children'
+    )
 
     @property
     def full_name(self):
@@ -184,8 +202,8 @@ class AttendanceRecord(models.Model):
     STATUS_CHOICES = (
         ('present', 'Present'),
         ('late', 'Late'),
-        ('excused', 'Excused'),
-        ('unexcused', 'Unexcused'),
+        ('exempted', 'Exempted'),
+        ('absent', 'Absent'),
     )
     SESSION_TYPE_CHOICES = (
         ('theory', 'Theory'),

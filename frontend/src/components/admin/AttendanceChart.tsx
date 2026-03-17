@@ -110,11 +110,11 @@ const AttendanceChart = () => {
             (r: any) => r.status === "present",
           ).length;
           const late = records.filter((r: any) => r.status === "late").length;
-          const excused = records.filter(
-            (r: any) => r.status === "excused",
+          const exempted = records.filter(
+            (r: any) => r.status === "exempted",
           ).length;
-          const unexcused = records.filter(
-            (r: any) => r.status === "unexcused",
+          const absent = records.filter(
+            (r: any) => r.status === "absent",
           ).length;
 
           return {
@@ -125,13 +125,13 @@ const AttendanceChart = () => {
             fullName: course.name,
             Present: present,
             Late: late,
-            Excused: excused,
-            Unexcused: unexcused,
+            Exempted: exempted,
+            Absent: absent,
           };
         }),
       );
       setChartData(
-        data.filter((d) => d.Present + d.Late + d.Excused + d.Unexcused > 0),
+        data.filter((d) => d.Present + d.Late + d.Exempted + d.Absent > 0),
       );
     } catch (e) {
       console.error(e);
@@ -369,9 +369,9 @@ const AttendanceChart = () => {
                 fill="hsl(var(--secondary))"
                 radius={[4, 4, 0, 0]}
               />
-              <Bar dataKey="Excused" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="Exempted" fill="#94a3b8" radius={[4, 4, 0, 0]} />
               <Bar
-                dataKey="Unexcused"
+                dataKey="Absent"
                 fill="hsl(var(--destructive))"
                 radius={[4, 4, 0, 0]}
               />

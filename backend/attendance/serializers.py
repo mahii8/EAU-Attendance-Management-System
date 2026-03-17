@@ -9,7 +9,7 @@ from .models import (
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role', 'title', 'has_logged_in_before']
 
 
 class LoginSerializer(serializers.Serializer):

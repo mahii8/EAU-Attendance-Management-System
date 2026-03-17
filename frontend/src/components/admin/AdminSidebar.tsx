@@ -46,20 +46,20 @@ const AdminSidebar = ({
 
   return (
     <aside
-      className={`hidden lg:flex flex-col bg-sidebar text-sidebar-foreground transition-all duration-300 ${
+      className={`hidden lg:flex flex-col bg-sidebar text-sidebar-foreground transition-all duration-300 sticky top-0 h-screen flex-shrink-0 ${
         collapsed ? "w-16" : "w-56"
       }`}
     >
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-4 border-b border-sidebar-border min-h-[64px]">
+      <div className="flex items-center gap-3 px-4 py-5 border-b border-sidebar-border flex-shrink-0">
         <img
           src={eauLogo}
           alt="EAU"
-          className="h-10 w-10 object-contain flex-shrink-0"
+          className={`object-contain flex-shrink-0 transition-all duration-300 ${collapsed ? "h-9 w-9" : "h-14 w-14"}`}
         />
         {!collapsed && (
           <div>
-            <p className="font-display font-bold text-sm leading-tight">
+            <p className="font-display font-bold text-base leading-tight">
               EAU Attendance
             </p>
             <p className="text-xs text-sidebar-foreground/60">Admin Portal</p>
@@ -71,7 +71,7 @@ const AdminSidebar = ({
       {onCollapse && (
         <button
           onClick={() => onCollapse(!collapsed)}
-          className="flex items-center justify-end px-3 py-2 text-sidebar-foreground/50 hover:text-sidebar-foreground transition-colors"
+          className="flex items-center justify-end px-3 py-2 text-sidebar-foreground/50 hover:text-sidebar-foreground transition-colors flex-shrink-0"
         >
           {collapsed ? (
             <ChevronRight className="w-4 h-4" />
@@ -81,7 +81,7 @@ const AdminSidebar = ({
         </button>
       )}
 
-      {/* Nav */}
+      {/* Nav — scrollable middle section */}
       <nav className="flex-1 px-2 py-2 space-y-0.5 overflow-y-auto">
         {navItems.map(({ id, label, icon: Icon }) => {
           const isActive = activeTab === id;
@@ -108,8 +108,8 @@ const AdminSidebar = ({
         })}
       </nav>
 
-      {/* Sign out */}
-      <div className="px-2 py-4 border-t border-sidebar-border">
+      {/* Sign out — always pinned to bottom */}
+      <div className="px-2 py-4 border-t border-sidebar-border flex-shrink-0">
         <button
           onClick={signOut}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-all"

@@ -68,13 +68,13 @@ interface Student {
   student_id: string;
 }
 
-type AttendanceStatus = "present" | "late" | "excused" | "unexcused";
+type AttendanceStatus = "present" | "late" | "exempted" | "absent";
 
 const statusLabels: Record<AttendanceStatus, string> = {
   present: "Present",
   late: "Late",
-  excused: "Excused",
-  unexcused: "Unexcused",
+  exempted: "Exempted",
+  absent: "Absent",
 };
 
 const TeacherDashboard = () => {
@@ -231,14 +231,14 @@ const TeacherDashboard = () => {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="sticky top-0 z-30 bg-card border-b border-border px-4 lg:px-6 py-3 flex items-center justify-between">
+      <header className="sticky top-0 z-30 bg-card border-b border-border px-4 lg:px-6 py-2 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <img src={eauLogo} alt="EAU" className="h-10 object-contain" />
-          <h1 className="font-display text-lg font-bold">Teacher Portal</h1>
+          <img src={eauLogo} alt="EAU" className="h-8 object-contain" />
+          <h1 className="font-display text-base font-bold">Teacher Portal</h1>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground hidden sm:block">
-            {user?.first_name} {user?.last_name}
+          <span className="text-sm font-medium text-muted-foreground hidden sm:block">
+            {user?.title ? `${user.title} ` : ''}{user?.first_name} {user?.last_name}
           </span>
           <Button
             variant="ghost"
@@ -251,10 +251,10 @@ const TeacherDashboard = () => {
         </div>
       </header>
 
-      <main className="p-4 lg:p-6 max-w-6xl mx-auto space-y-6">
+      <main className="p-3 lg:p-4 max-w-6xl mx-auto space-y-4">
         {/* Step-by-step selectors */}
         <Card className="shadow-card border-border/50">
-          <CardHeader className="pb-3">
+          <CardHeader className="pb-2">
             <CardTitle className="font-display text-base">
               Select Class
             </CardTitle>
@@ -523,21 +523,38 @@ const TeacherDashboard = () => {
 
         {/* Empty state */}
         {!isReadyToLog && (
-          <div className="text-center py-20 text-muted-foreground">
-            <BookOpen className="w-12 h-12 mx-auto mb-4 opacity-30" />
-            <p className="font-display text-lg">
-              Select a class to get started
+          <div className="flex flex-col items-center justify-center py-10 lg:py-16 text-center px-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="relative w-20 h-20 mb-4">
+              <div className="absolute inset-0 bg-gradient-to-tr from-primary/20 via-primary/10 to-transparent rounded-2xl rotate-6 pointer-events-none" />
+              <div className="absolute inset-0 bg-gradient-to-br from-eau-crimson-light/40 to-eau-mustard-light/40 rounded-2xl -rotate-3 pointer-events-none" />
+              <div className="relative flex items-center justify-center w-full h-full bg-card border border-border shadow-sm rounded-[14px] transition-transform hover:scale-105 duration-300">
+                <BookOpen className="w-8 h-8 text-primary" strokeWidth={1.5} />
+              </div>
+            </div>
+            <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground mb-2">
+              {user?.has_logged_in_before 
+                ? `Welcome back, ${user?.title ? user.title + ' ' : ''}${user?.first_name} ${user?.last_name}!`
+                : `Welcome ${user?.title ? user.title + ' ' : ''}${user?.first_name} ${user?.last_name}!`}
+            </h2>
+            <p className="text-muted-foreground text-sm lg:text-base mb-6 max-w-sm">
+              Select a class to get started logging attendance and viewing student records.
             </p>
-            <p className="text-sm mt-1">
-              Choose programme → year → section → course above
-            </p>
+            <div className="inline-flex items-center gap-2 text-xs lg:text-sm font-medium text-muted-foreground bg-muted/40 backdrop-blur-sm px-4 py-2 rounded-full border border-border/60 shadow-sm">
+              <span className="text-foreground/80">Programme</span>
+              <span className="text-muted-foreground/40">→</span>
+              <span className="text-foreground/80">Year</span>
+              <span className="text-muted-foreground/40">→</span>
+              <span className="text-foreground/80">Section</span>
+              <span className="text-muted-foreground/40">→</span>
+              <span className="text-foreground/80">Course</span>
+            </div>
           </div>
         )}
       </main>
 
       {/* Log Attendance Modal */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-start justify-between">
               <div>
@@ -647,8 +664,8 @@ const TeacherDashboard = () => {
                             [
                               "present",
                               "late",
-                              "excused",
-                              "unexcused",
+                              "exempted",
+                              "absent",
                             ] as AttendanceStatus[]
                           ).map((s) => (
                             <button
@@ -659,19 +676,23 @@ const TeacherDashboard = () => {
                                   [student.id]: s,
                                 }))
                               }
-                              className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
+                              className={`transition-all ${
+                                shortName 
+                                  ? "w-8 h-8 rounded-full flex items-center justify-center p-0 text-sm font-semibold ring-offset-2" 
+                                  : "px-3 py-1.5 rounded-full text-xs font-semibold border"
+                              } ${
                                 attendanceMap[student.id] === s
                                   ? s === "present"
-                                    ? "bg-primary text-primary-foreground border-primary"
+                                    ? shortName ? "bg-[#22c55e] text-white ring-2 ring-[#22c55e]/30" : "bg-[#22c55e] text-white border-[#22c55e]"
                                     : s === "late"
-                                      ? "bg-secondary text-secondary-foreground border-secondary"
-                                      : s === "excused"
-                                        ? "bg-muted text-foreground border-border"
-                                        : "bg-destructive text-destructive-foreground border-destructive"
-                                  : "bg-background text-muted-foreground border-border hover:bg-muted"
+                                      ? shortName ? "bg-[#fef08a] text-[#ca8a04] ring-2 ring-[#fef08a]/50" : "bg-[#fef08a] text-[#ca8a04] border-[#fde047]"
+                                      : s === "exempted"
+                                        ? shortName ? "bg-[#64748b] text-white ring-2 ring-[#64748b]/50" : "bg-[#64748b] text-white border-[#475569]"
+                                        : shortName ? "bg-[#fee2e2] text-[#ef4444] ring-2 ring-[#fca5a5]/50" : "bg-[#fee2e2] text-[#ef4444] border-[#fca5a5]"
+                                  : "bg-background text-muted-foreground border-border hover:bg-muted/50"
                               }`}
                             >
-                              {statusLabels[s]}
+                              {shortName ? statusLabels[s].charAt(0) : statusLabels[s]}
                             </button>
                           ))}
                         </div>

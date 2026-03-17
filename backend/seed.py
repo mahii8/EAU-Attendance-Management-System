@@ -240,6 +240,45 @@ maint_b_students = create_students(sections[("maint", "B")], "MAINT", 10)
 mgmt_a_students = create_students(sections[("mgmt", "A")], "MGMT", 10)
 mgmt_b_students = create_students(sections[("mgmt", "B")], "MGMT", 10)
 
+
+print("Setting up specific portal test accounts (student1 / parent1)...")
+student1_user = User.objects.create(
+    username="student1",
+    first_name="Abebe",
+    last_name="Tadesse",
+    email="student1@eau.edu",
+    role="student",
+    password=make_password("student123")
+)
+parent1_user = User.objects.create(
+    username="parent1",
+    first_name="Tadesse",
+    last_name="Parent",
+    email="parent1@eau.edu",
+    role="parent",
+    password=make_password("parent123")
+)
+
+# Link them to the very first student in aero_a
+target_student = aero_a_students[0]
+target_student.user = student1_user
+target_student.parent_user = parent1_user
+target_student.save()
+
+# Create a second student linked to the same parent
+target_student2 = aero_a_students[1]
+student2_user = User.objects.create(
+    username="student2",
+    first_name="Kidist",
+    last_name="Alemayehu",
+    email="student2@eau.edu",
+    role="student",
+    password=make_password("student123")
+)
+target_student2.user = student2_user
+target_student2.parent_user = parent1_user
+target_student2.save()
+
 print("Creating attendance records...")
 
 def create_attendance(students, courses, weeks=3):
@@ -258,12 +297,12 @@ def create_attendance(students, courses, weeks=3):
                         "UGR/10015/24", "UGR/10025/24"
                     ]:
                         status = random.choices(
-                            ['present', 'unexcused', 'excused', 'late'],
-                            weights=[30, 40, 20, 10]
+                            ['Present', 'Absent', 'Exempted', 'Late'],
+                            weights=[0.85, 0.05, 0.05, 0.05]
                         )[0]
                     else:
                         status = random.choices(
-                            ['present', 'late', 'excused', 'unexcused'],
+                            ['present', 'late', 'exempted', 'absent'],
                             weights=[75, 10, 10, 5]
                         )[0]
 
@@ -300,4 +339,6 @@ print(f"""
    
    Teacher logins: teacher1-5 / teacher123
    Admin login:    admin / admin123
+   Student login:  student1 / student123 (also student2)
+   Parent login:   parent1 / parent123 (linked to student1 & student2)
 """)

@@ -9,8 +9,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { FileText, Download, Users, BookOpen, BarChart2 } from "lucide-react";
-import { downloadReportApi } from "@/api/axios";
+import { downloadReportApi, getCourseTrendApi } from "@/api/axios";
 import { toast } from "sonner";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import { useEffect } from "react";
 
 interface Course {
   id: number;
@@ -28,6 +38,22 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
   const [selectedCourse, setSelectedCourse] = useState<string>("");
   const [selectedStudent, setSelectedStudent] = useState<string>("");
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [trendData, setTrendData] = useState<{name: string, percentage: number}[]>([]);
+  const [loadingTrend, setLoadingTrend] = useState(false);
+
+  useEffect(() => {
+    if (activeReportTab === "course" && selectedCourse) {
+      setLoadingTrend(true);
+      getCourseTrendApi(parseInt(selectedCourse), 3)
+        .then((res) => {
+          setTrendData(res.data);
+        })
+        .catch(() => toast.error("Failed to load course trend data"))
+        .finally(() => setLoadingTrend(false));
+    } else {
+      setTrendData([]);
+    }
+  }, [selectedCourse, activeReportTab]);
 
   const handleCourseReport = async (
     format: "pdf" | "csv",
@@ -203,10 +229,59 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
             </div>
 
             {selectedCourse && (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-                <button
-                  onClick={() => handleCourseReport("pdf", "full")}
-                  disabled={!!downloading}
+              <div className="space-y-4 pt-2">
+                {/* Course Trend Chart */}
+                <div className="p-4 rounded-xl border border-border bg-card/50">
+                  <h4 className="text-sm font-medium mb-4">3-Month Attendance Trend</h4>
+                  {loadingTrend ? (
+                     <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">
+                       Loading trend data...
+                     </div>
+                  ) : trendData.length > 0 ? (
+                    <div className="h-[200px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={trendData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                          <XAxis 
+                            dataKey="name" 
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} 
+                            dy={10}
+                          />
+                          <YAxis 
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                            domain={[0, 100]}
+                            tickFormatter={(val) => `${val}%`}
+                          />
+                          <Tooltip 
+                            contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))", fontSize: "12px", background: "hsl(var(--card))" }}
+                            formatter={(value: number) => [`${value}%`, "Attendance"]}
+                          />
+                          <Line 
+                            type="monotone" 
+                            dataKey="percentage" 
+                            stroke="hsl(var(--primary))" 
+                            strokeWidth={2}
+                            dot={{ fill: "hsl(var(--background))", stroke: "hsl(var(--primary))", strokeWidth: 2, r: 4 }}
+                            activeDot={{ r: 6 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">
+                       No trend data available for this course.
+                     </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <button
+                    onClick={() => handleCourseReport("pdf", "full")}
+                    disabled={!!downloading}
                   className="flex items-center gap-3 p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all group"
                 >
                   <div className="p-2 rounded-lg bg-destructive/10 group-hover:bg-destructive/20 transition-colors">
@@ -248,6 +323,7 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                   </div>
                   <Download className="w-4 h-4 ml-auto text-muted-foreground group-hover:text-primary" />
                 </button>
+              </div>
               </div>
             )}
 

@@ -49,11 +49,17 @@ class LoginView(APIView):
                 {'error': 'Invalid username or password'},
                 status=status.HTTP_401_UNAUTHORIZED
             )
+        
+        user_data = UserSerializer(user).data
+        if not user.has_logged_in_before:
+            user.has_logged_in_before = True
+            user.save(update_fields=['has_logged_in_before'])
+
         refresh = RefreshToken.for_user(user)
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
-            'user': UserSerializer(user).data
+            'user': user_data
         })
 
 
@@ -244,7 +250,7 @@ class AttendanceSummaryView(APIView):
 
             total_hours = course.total_credit_hours
             missed_hours = records.filter(
-                status__in=['unexcused', 'excused']
+                status__in=['absent', 'exempted']
             ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
 
             minimum = course.minimum_required_hours
@@ -373,7 +379,7 @@ class AttendanceSubmitView(APIView):
             )
             created_records.append(att_record)
 
-            if status_val in ['unexcused', 'absent']:
+            if status_val in ['absent']:
                 self.handle_absence(student, course, attendance_date, request.user)
 
         return Response({
@@ -638,6 +644,150 @@ class SystemSettingsView(APIView):
 # ─────────────────────────────────────────
 # REPORT VIEWS
 # ─────────────────────────────────────────
+class DownloadReportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        course_id = request.query_params.get('course_id')
+        student_id = request.query_params.get('student_id')
+        summary = request.query_params.get('summary')
+        
+        report_format = request.query_params.get('format', 'pdf')
+        report_type = request.query_params.get('type', 'full')
+
+        if course_id:
+            try:
+                course = Course.objects.get(id=course_id)
+            except Course.DoesNotExist:
+                return Response({'error': 'Course not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            if report_type == 'weekly':
+                end_date = date.today()
+                start_date = end_date - timedelta(days=7)
+                report_summary = get_course_summary(course, start_date, end_date)
+                title = "Weekly Attendance Report"
+                filename = f"{course.name}_weekly_{end_date}"
+            else:
+                report_summary = get_course_summary(course)
+                title = "Full Attendance Report"
+                filename = f"{course.name}_full_report"
+
+            if report_format == 'csv':
+                return generate_course_csv(course, report_summary, f"{filename}.csv")
+
+            buffer = generate_course_pdf(course, report_summary, title)
+            response = HttpResponse(buffer, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="{filename}.pdf"'
+            return response
+
+        elif student_id:
+            try:
+                student = Student.objects.get(id=student_id)
+            except Student.DoesNotExist:
+                return Response({'error': 'Student not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            course_ids = AttendanceRecord.objects.filter(
+                student=student
+            ).values_list('course_id', flat=True).distinct()
+
+            course_summaries = []
+            for cid in course_ids:
+                course = Course.objects.get(id=cid)
+                attended_hours = AttendanceRecord.objects.filter(
+                    student=student,
+                    course=course,
+                    status__in=['present', 'late']
+                ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+
+                total_hours = course.total_credit_hours
+                minimum = course.minimum_required_hours
+                missed_hours = AttendanceRecord.objects.filter(
+                    student=student,
+                    course=course,
+                    status__in=['absent', 'exempted']
+                ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+
+                percentage = round(
+                    float(attended_hours) / float(total_hours) * 100
+                    if total_hours > 0 else 0, 1
+                )
+
+                if percentage >= 90:
+                    st = 'Safe'
+                elif percentage >= 85:
+                    st = 'Warning'
+                else:
+                    st = 'At Risk'
+
+                course_summaries.append({
+                    'course_name': course.name,
+                    'attended_hours': float(attended_hours),
+                    'missed_hours': float(missed_hours),
+                    'total_hours': float(total_hours),
+                    'percentage': percentage,
+                    'minimum_required': float(minimum),
+                    'status': st
+                })
+
+            if report_format == 'csv':
+                return generate_student_csv(student, course_summaries)
+
+            buffer = generate_student_pdf(student, course_summaries)
+            response = HttpResponse(buffer, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="student_{student.student_id}_report.pdf"'
+            return response
+
+        elif summary == 'true':
+            # Optionally implement logic for an all-courses summary report if needed
+            return Response({'error': 'Overall summary report not implemented yet.'}, status=status.HTTP_501_NOT_IMPLEMENTED)
+            
+        return Response({'error': 'Missing valid filter (course_id, student_id, summary)'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CourseTrendView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, course_id):
+        try:
+            course = Course.objects.get(id=course_id)
+        except Course.DoesNotExist:
+            return Response({'error': 'Course not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        months = int(request.query_params.get('months', 3))
+        end_date = date.today()
+        start_date = end_date - timedelta(days=30 * months)
+
+        records = AttendanceRecord.objects.filter(
+            course=course,
+            status__in=['present', 'late', 'absent', 'exempted'],
+            date__gte=start_date,
+            date__lte=end_date
+        ).order_by('date')
+
+        weekly_data = {}
+        for r in records:
+            week_start = r.date - timedelta(days=r.date.weekday())
+            week_label = f"Week of {week_start.strftime('%b %d')}"
+            
+            if week_label not in weekly_data:
+                weekly_data[week_label] = {'attended': Decimal('0'), 'total': Decimal('0')}
+
+            if r.status in ['present', 'late']:
+                weekly_data[week_label]['attended'] += r.hours_attended
+            weekly_data[week_label]['total'] += r.hours_attended
+
+        trend = []
+        for label, data in weekly_data.items():
+            percentage = round(
+                float(data['attended']) / float(data['total']) * 100
+                if data['total'] > 0 else 0, 1
+            )
+            trend.append({
+                'name': label,
+                'percentage': percentage
+            })
+
+        return Response(trend)
 class CourseReportView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -699,7 +849,7 @@ class StudentReportView(APIView):
             missed_hours = AttendanceRecord.objects.filter(
                 student=student,
                 course=course,
-                status__in=['unexcused', 'excused']
+                status__in=['absent', 'exempted']
             ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
 
             percentage = round(
@@ -731,3 +881,140 @@ class StudentReportView(APIView):
         response = HttpResponse(buffer, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="student_{student.student_id}_report.pdf"'
         return response
+
+
+# ─────────────────────────────────────────
+# PORTAL DASHBOARDS
+# ─────────────────────────────────────────
+class StudentDashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not hasattr(user, 'student_profile'):
+            return Response({'error': 'No student profile found for this user.'}, status=status.HTTP_404_NOT_FOUND)
+
+        student = user.student_profile
+        records = AttendanceRecord.objects.filter(student=student)
+        
+        # Total overall attendance %
+        total_records = records.count()
+        attended = records.filter(status__in=['present', 'late']).count()
+        overall_percentage = round((attended / total_records * 100) if total_records > 0 else 100.0, 1)
+
+        # Enrolled courses stats
+        course_ids = records.values_list('course_id', flat=True).distinct()
+        enrolled_courses_count = course_ids.count()
+        is_at_risk = False
+        course_breakdown = []
+
+        for cid in course_ids:
+            course = Course.objects.get(id=cid)
+            course_recs = records.filter(course_id=cid)
+            absent_hours = course_recs.filter(status='absent').aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+            absence_rate = round(float(absent_hours) / float(course.total_credit_hours) * 100 if course.total_credit_hours > 0 else 0, 1)
+            if absence_rate >= 15.0:
+                is_at_risk = True
+            
+            course_breakdown.append({
+                'course_name': course.name,
+                'course_code': course.code,
+                'total_credit_hours': float(course.total_credit_hours),
+                'absent_hours': float(absent_hours),
+                'absence_rate': absence_rate,
+                'is_critical': absence_rate >= 15.0
+            })
+        
+        # Recent attendance history
+        recent_records = records.order_by('-date')[:15]
+        history = []
+        for r in recent_records:
+            history.append({
+                'date': r.date.strftime("%b %d, %Y"),
+                'course_name': r.course.name,
+                'status': r.get_status_display()
+            })
+
+        return Response({
+            'student': {
+                'id': student.id,
+                'full_name': student.full_name,
+                'student_id': student.student_id,
+                'email': student.email
+            },
+            'metrics': {
+                'overall_percentage': overall_percentage,
+                'enrolled_courses': enrolled_courses_count,
+                'is_at_risk': is_at_risk
+            },
+            'course_breakdown': course_breakdown,
+            'history': history
+        })
+
+
+class ParentDashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        children = user.children.all()
+        if not children.exists():
+            return Response({'error': 'No linked students found for this parent account.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Build data array for each child
+        children_data = []
+
+        for student in children:
+            records = AttendanceRecord.objects.filter(student=student)
+            total_records = records.count()
+            attended = records.filter(status__in=['present', 'late']).count()
+            overall_percentage = round((attended / total_records * 100) if total_records > 0 else 100.0, 1)
+
+            course_ids = records.values_list('course_id', flat=True).distinct()
+            is_at_risk = False
+            course_breakdown = []
+
+            for cid in course_ids:
+                course = Course.objects.get(id=cid)
+                course_recs = records.filter(course_id=cid)
+                absent_hours = course_recs.filter(status='absent').aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+                absence_rate = round(float(absent_hours) / float(course.total_credit_hours) * 100 if course.total_credit_hours > 0 else 0, 1)
+                if absence_rate >= 15.0:
+                    is_at_risk = True
+                
+                course_breakdown.append({
+                    'course_name': course.name,
+                    'course_code': course.code,
+                    'total_credit_hours': float(course.total_credit_hours),
+                    'absent_hours': float(absent_hours),
+                    'absence_rate': absence_rate,
+                    'is_critical': absence_rate >= 15.0
+                })
+
+            recent_records = records.order_by('-date')[:15]
+            history = []
+            for r in recent_records:
+                history.append({
+                    'date': r.date.strftime("%b %d, %Y"),
+                    'course_name': r.course.name,
+                    'status': r.get_status_display()
+                })
+
+            children_data.append({
+                'student': {
+                    'id': student.id,
+                    'full_name': student.full_name,
+                    'student_id': student.student_id,
+                    'email': student.email
+                },
+                'metrics': {
+                    'overall_percentage': overall_percentage,
+                    'enrolled_courses': len(course_ids),
+                    'total_records': total_records,
+                    'is_at_risk': is_at_risk
+                },
+                'course_breakdown': course_breakdown,
+                'history': history,
+            })
+
+        return Response({'children': children_data})

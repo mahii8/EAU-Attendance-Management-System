@@ -69,6 +69,8 @@ const AdminDashboard = () => {
   const [totalRecords, setTotalRecords] = useState(0);
   const [atRiskCount, setAtRiskCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [students, setStudents] = useState<{id: number; full_name: string; student_id: string}[]>([]);
+  const [statusCounts, setStatusCounts] = useState({ present: 0, late: 0, exempted: 0, absent: 0 });
 
   useEffect(() => {
     const fetchData = async () => {
@@ -84,11 +86,19 @@ const AdminDashboard = () => {
         setCourses(coursesRes.data);
         setProgrammes(programmesRes.data);
         setTotalStudents(studentsRes.data.length);
+        setStudents(studentsRes.data || []);
         setNotifications(notifRes.data.notifications || []);
 
         // Get attendance records count
         const attendanceRes = await getAttendanceApi();
-        setTotalRecords(attendanceRes.data.length);
+        const records: any[] = attendanceRes.data || [];
+        setTotalRecords(records.length);
+        setStatusCounts({
+          present:  records.filter((r) => r.status === "present").length,
+          late:     records.filter((r) => r.status === "late").length,
+          exempted: records.filter((r) => r.status === "exempted").length,
+          absent:   records.filter((r) => r.status === "absent").length,
+        });
       } catch (e) {
         console.error(e);
       } finally {
@@ -142,6 +152,8 @@ const AdminDashboard = () => {
           notifications={notifications}
           onMarkRead={handleMarkRead}
           onNavigate={setActiveTab}
+          students={students}
+          courses={courses}
         />
 
         <main className="flex-1 p-4 lg:p-6 space-y-6 overflow-auto">
@@ -157,7 +169,12 @@ const AdminDashboard = () => {
                 <div className="xl:col-span-2">
                   <AttendanceChart />
                 </div>
-                <StatusDistribution safe={0} warning={0} atRisk={atRiskCount} />
+                <StatusDistribution
+                  present={statusCounts.present}
+                  late={statusCounts.late}
+                  exempted={statusCounts.exempted}
+                  absent={statusCounts.absent}
+                />
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <div className="xl:col-span-2">

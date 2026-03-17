@@ -7,6 +7,8 @@ import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import Login from "./pages/Login";
 import AdminDashboard from "./pages/AdminDashboard";
 import TeacherDashboard from "./pages/TeacherDashboard";
+import StudentDashboard from "./pages/StudentDashboard";
+import ParentDashboard from "./pages/ParentDashboard";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -23,6 +25,8 @@ const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode;
   if (allowedRoles && role && !allowedRoles.includes(role)) {
     if (role === "admin") return <Navigate to="/admin" replace />;
     if (role === "teacher") return <Navigate to="/teacher" replace />;
+    if (role === "student") return <Navigate to="/student" replace />;
+    if (role === "parent") return <Navigate to="/parent" replace />;
     return <Navigate to="/login" replace />;
   }
 
@@ -36,6 +40,8 @@ const RoleRouter = () => {
   if (!user) return <Navigate to="/login" replace />;
   if (role === "admin") return <Navigate to="/admin" replace />;
   if (role === "teacher") return <Navigate to="/teacher" replace />;
+  if (role === "student") return <Navigate to="/student" replace />;
+  if (role === "parent") return <Navigate to="/parent" replace />;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background text-center p-6">
@@ -55,6 +61,8 @@ const AppRoutes = () => {
       <Route path="/login" element={user ? <RoleRouter /> : <Login />} />
       <Route path="/admin" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDashboard /></ProtectedRoute>} />
       <Route path="/teacher" element={<ProtectedRoute allowedRoles={["teacher"]}><TeacherDashboard /></ProtectedRoute>} />
+      <Route path="/student" element={<ProtectedRoute allowedRoles={["student"]}><StudentDashboard /></ProtectedRoute>} />
+      <Route path="/parent" element={<ProtectedRoute allowedRoles={["parent"]}><ParentDashboard /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

@@ -30,15 +30,15 @@ interface AttendanceTabProps {
 const statusStyles: Record<string, string> = {
   present: "bg-primary/10 text-primary border-primary/30",
   late: "bg-secondary/20 text-secondary-foreground border-secondary/30",
-  excused: "bg-muted text-muted-foreground border-border",
-  unexcused: "bg-destructive/10 text-destructive border-destructive/30",
+  exempted: "bg-muted text-muted-foreground border-border",
+  absent: "bg-destructive/10 text-destructive border-destructive/30",
 };
 
 const statusLabels: Record<string, string> = {
   present: "Present",
   late: "Late",
-  excused: "Excused",
-  unexcused: "Unexcused",
+  exempted: "Exempted",
+  absent: "Absent",
 };
 
 const AttendanceTab = ({ courses, programmes }: AttendanceTabProps) => {

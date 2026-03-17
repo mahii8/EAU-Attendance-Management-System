@@ -15,6 +15,7 @@ urlpatterns = [
     path('courses/<int:course_id>/', views.CourseUpdateView.as_view()),
     path('courses/<int:course_id>/students/', views.CourseStudentsView.as_view()),
     path('courses/<int:course_id>/summary/', views.AttendanceSummaryView.as_view()),
+    path('courses/<int:course_id>/trend/', views.CourseTrendView.as_view()),
 
     # Attendance
     path('attendance/', views.AttendanceListView.as_view()),
@@ -38,4 +39,9 @@ urlpatterns = [
     # Reports
     path('reports/course/<int:course_id>/', views.CourseReportView.as_view()),
     path('reports/student/<int:student_id>/', views.StudentReportView.as_view()),
+    path('reports/download/', views.DownloadReportView.as_view()),
+
+    # Portals
+    path('student/dashboard/', views.StudentDashboardView.as_view()),
+    path('parent/dashboard/', views.ParentDashboardView.as_view()),
 ]
