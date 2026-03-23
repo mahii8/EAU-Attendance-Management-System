@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,23 +7,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
-import { createCourseApi, updateCourseApi } from "@/api/axios";
+import { createCourseApi, updateCourseApi, deleteCourseApi } from "@/api/axios";
+import * as XLSX from "xlsx";
 
 interface Course {
   id: number;
   name: string;
   code: string;
   total_credit_hours: string;
+  minimum_required_hours?: number;
+  minimum_attendance_percent?: number;
   programme_name: string;
   year: number;
-  semester: number;
+  semester?: number;
+  is_active?: boolean;
 }
 
 interface Programme {
   id: number;
   name: string;
+  code?: string;
   duration_years: number;
 }
 
@@ -33,6 +38,46 @@ interface CoursesTabProps {
   onCoursesChange: (courses: Course[]) => void;
 }
 
+const parseFileToRows = async (
+  file: File,
+): Promise<Record<string, string>[]> => {
+  const isExcel = file.name.endsWith(".xlsx") || file.name.endsWith(".xls");
+  if (isExcel) {
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const raw: any[][] = XLSX.utils.sheet_to_json(ws, {
+      header: 1,
+      defval: "",
+    });
+    const headers = (raw[0] as string[]).map((h) =>
+      String(h).trim().toLowerCase(),
+    );
+    return raw
+      .slice(1)
+      .filter((r) => r.some((v: any) => String(v).trim() !== ""))
+      .map((r) => {
+        const obj: Record<string, string> = {};
+        headers.forEach((h, i) => {
+          obj[h] = String(r[i] ?? "").trim();
+        });
+        return obj;
+      });
+  } else {
+    const text = await file.text();
+    const lines = text.split("\n").filter(Boolean);
+    const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+    return lines.slice(1).map((line) => {
+      const values = line.split(",").map((v) => v.trim());
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => {
+        obj[h] = values[i] || "";
+      });
+      return obj;
+    });
+  }
+};
+
 const CoursesTab = ({
   courses: initialCourses,
   programmes,
@@ -41,6 +86,7 @@ const CoursesTab = ({
   const [courses, setCourses] = useState(initialCourses);
   const [editOpen, setEditOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editCourse, setEditCourse] = useState<Course | null>(null);
   const [editForm, setEditForm] = useState({
     name: "",
@@ -59,6 +105,12 @@ const CoursesTab = ({
   });
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResults, setImportResults] = useState<{
+    created: number;
+    errors: { row: number; error: string }[];
+  } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const updateLocal = (updated: Course[]) => {
     setCourses(updated);
@@ -72,7 +124,7 @@ const CoursesTab = ({
       code: course.code || "",
       total_credit_hours: course.total_credit_hours,
       year: String(course.year),
-      semester: String(course.semester),
+      semester: String(course.semester || 1),
     });
     setEditOpen(true);
   };
@@ -109,7 +161,6 @@ const CoursesTab = ({
         total_credit_hours: parseFloat(addForm.total_credit_hours),
         programme_id: parseInt(addForm.programme_id),
         year: parseInt(addForm.year),
-        semester: parseInt(addForm.semester),
       });
       updateLocal([...courses, res.data]);
       toast.success("Course added!");
@@ -129,6 +180,109 @@ const CoursesTab = ({
     }
   };
 
+  const handleDelete = async (id: number) => {
+    if (
+      !confirm(
+        "Deactivate this course? It will no longer appear in new offerings.",
+      )
+    )
+      return;
+    try {
+      await deleteCourseApi(id);
+      updateLocal(courses.filter((c) => c.id !== id));
+      toast.success("Course deactivated.");
+    } catch {
+      toast.error("Failed to deactivate course");
+    }
+  };
+
+  const downloadTemplate = () => {
+    const csv = [
+      "course_name,code,programme_code,year,semester,credit_hours",
+      "Aerodynamics I,AERO201,AME,2,1,48",
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "courses_template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setImportResults(null);
+
+    let rows: Record<string, string>[];
+    try {
+      rows = await parseFileToRows(file);
+    } catch {
+      toast.error(
+        "Failed to read file. Make sure it is a valid CSV or Excel file.",
+      );
+      setImporting(false);
+      return;
+    }
+
+    let created = 0;
+    const errors: { row: number; error: string }[] = [];
+    const newCourses: Course[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row.course_name || !row.credit_hours) {
+        errors.push({
+          row: i + 2,
+          error: "Missing course_name or credit_hours",
+        });
+        continue;
+      }
+      const prog = programmes.find(
+        (p) =>
+          p.code?.toLowerCase() === row.programme_code?.toLowerCase() ||
+          p.name?.toLowerCase() === row.programme_code?.toLowerCase(),
+      );
+      if (!prog) {
+        errors.push({
+          row: i + 2,
+          error: `Programme "${row.programme_code}" not found`,
+        });
+        continue;
+      }
+      try {
+        const res = await createCourseApi({
+          name: row.course_name,
+          code: row.code || "",
+          total_credit_hours: parseFloat(row.credit_hours),
+          programme_id: prog.id,
+          year: parseInt(row.year) || 1,
+        });
+        newCourses.push(res.data);
+        created++;
+      } catch (err: any) {
+        errors.push({
+          row: i + 2,
+          error: err?.response?.data?.error || "Failed",
+        });
+      }
+    }
+
+    // Add all new courses at once — fixes stale state bug
+    if (newCourses.length > 0) {
+      const updated = [...courses, ...newCourses];
+      setCourses(updated);
+      onCoursesChange(updated);
+    }
+
+    setImportResults({ created, errors });
+    setImporting(false);
+    if (fileRef.current) fileRef.current.value = "";
+    if (created > 0) toast.success(`${created} courses imported!`);
+  };
+
   const selectedProg = programmes.find(
     (p) => p.id === parseInt(addForm.programme_id),
   );
@@ -143,13 +297,26 @@ const CoursesTab = ({
           <CardTitle className="font-display text-base">
             Course Management
           </CardTitle>
-          <Button
-            size="sm"
-            className="gap-1.5 bg-primary hover:bg-primary/90"
-            onClick={() => setAddOpen(true)}
-          >
-            <Plus className="w-4 h-4" /> Add Course
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => {
+                setImportResults(null);
+                setImportOpen(true);
+              }}
+            >
+              <Upload className="w-4 h-4" /> Import CSV
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1.5 bg-primary hover:bg-primary/90"
+              onClick={() => setAddOpen(true)}
+            >
+              <Plus className="w-4 h-4" /> Add Course
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <table className="w-full text-sm">
@@ -198,7 +365,7 @@ const CoursesTab = ({
                     {c.programme_name}
                   </td>
                   <td className="px-6 py-4 text-muted-foreground">
-                    Y{c.year} S{c.semester}
+                    Y{c.year} {c.semester ? `S${c.semester}` : ""}
                   </td>
                   <td className="px-6 py-4 text-muted-foreground">
                     {c.total_credit_hours}
@@ -212,7 +379,7 @@ const CoursesTab = ({
                         <Pencil className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => toast.error("Delete coming soon!")}
+                        onClick={() => handleDelete(c.id)}
                         className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -442,6 +609,87 @@ const CoursesTab = ({
                 className="bg-primary hover:bg-primary/90"
               >
                 {adding ? "Adding..." : "Add Course"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import Modal */}
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-display">
+              Import Courses via CSV or Excel
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="p-4 bg-muted/30 rounded-lg space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium">Required columns:</p>
+                <button
+                  onClick={downloadTemplate}
+                  className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+                >
+                  <Download className="w-3 h-3" /> Download template
+                </button>
+              </div>
+              <p className="font-mono text-xs text-muted-foreground">
+                course_name, code, programme_code, year, semester, credit_hours
+              </p>
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium">programme_code</span> must match
+                your programme code (e.g. AME) or full name. Teacher assignment
+                is done in{" "}
+                <span className="font-medium">Setup → Course Offerings</span>.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Upload CSV or Excel File
+              </p>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={handleImport}
+                disabled={importing}
+                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none"
+              />
+              {importing && (
+                <p className="text-xs text-muted-foreground">
+                  Importing courses...
+                </p>
+              )}
+            </div>
+
+            {importResults && (
+              <div
+                className={`p-3 rounded-lg text-sm ${
+                  importResults.errors.length === 0
+                    ? "bg-primary/10"
+                    : "bg-muted"
+                }`}
+              >
+                <p className="font-medium">
+                  {importResults.created} courses imported successfully
+                </p>
+                {importResults.errors.length > 0 && (
+                  <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+                    {importResults.errors.map((e, i) => (
+                      <p key={i} className="text-xs text-destructive">
+                        Row {e.row}: {e.error}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={() => setImportOpen(false)}>
+                Close
               </Button>
             </div>
           </div>

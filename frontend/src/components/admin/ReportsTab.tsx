@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,7 +9,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { FileText, Download, Users, BookOpen, BarChart2 } from "lucide-react";
-import { downloadReportApi, getCourseTrendApi } from "@/api/axios";
+import {
+  downloadReportApi,
+  getOfferingsApi,
+  getSemestersApi,
+} from "@/api/axios";
 import { toast } from "sonner";
 import {
   LineChart,
@@ -20,11 +24,19 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { useEffect } from "react";
 
 interface Course {
   id: number;
   name: string;
+}
+
+interface Offering {
+  id: number;
+  course_name: string;
+  section_name: string;
+  section_year: number;
+  programme_name: string;
+  semester_label: string;
 }
 
 interface ReportsTabProps {
@@ -35,41 +47,50 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
   const [activeReportTab, setActiveReportTab] = useState<
     "student" | "course" | "summary"
   >("student");
-  const [selectedCourse, setSelectedCourse] = useState<string>("");
-  const [selectedStudent, setSelectedStudent] = useState<string>("");
+  const [selectedOffering, setSelectedOffering] = useState<string>("");
   const [downloading, setDownloading] = useState<string | null>(null);
-  const [trendData, setTrendData] = useState<{name: string, percentage: number}[]>([]);
-  const [loadingTrend, setLoadingTrend] = useState(false);
+  const [offerings, setOfferings] = useState<Offering[]>([]);
+  const [loadingOfferings, setLoadingOfferings] = useState(false);
 
+  // Load offerings for current semester on mount
   useEffect(() => {
-    if (activeReportTab === "course" && selectedCourse) {
-      setLoadingTrend(true);
-      getCourseTrendApi(parseInt(selectedCourse), 3)
-        .then((res) => {
-          setTrendData(res.data);
-        })
-        .catch(() => toast.error("Failed to load course trend data"))
-        .finally(() => setLoadingTrend(false));
-    } else {
-      setTrendData([]);
-    }
-  }, [selectedCourse, activeReportTab]);
+    const loadOfferings = async () => {
+      setLoadingOfferings(true);
+      try {
+        const semRes = await getSemestersApi({ current: true });
+        const currentSem = semRes.data?.[0];
+        const params = currentSem ? { semester: currentSem.id } : {};
+        const res = await getOfferingsApi(params);
+        setOfferings(res.data || []);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingOfferings(false);
+      }
+    };
+    loadOfferings();
+  }, []);
 
-  const handleCourseReport = async (
+  const handleOfferingReport = async (
     format: "pdf" | "csv",
     type: "full" | "weekly",
   ) => {
-    if (!selectedCourse) {
+    if (!selectedOffering) {
       toast.error("Please select a course first");
       return;
     }
     const key = `${format}-${type}`;
     setDownloading(key);
     try {
-      await downloadReportApi("course", parseInt(selectedCourse), format, type);
+      await downloadReportApi(
+        "offering",
+        parseInt(selectedOffering),
+        format,
+        type,
+      );
       toast.success("Report downloaded!");
-    } catch {
-      toast.error("Failed to download report");
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to download report");
     } finally {
       setDownloading(null);
     }
@@ -116,7 +137,7 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
               Download a full attendance report for all students in a selected
-              course.
+              course offering.
             </p>
             <div className="flex items-end gap-4 flex-wrap">
               <div className="space-y-1.5">
@@ -124,16 +145,20 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                   Select Course
                 </p>
                 <Select
-                  value={selectedCourse}
-                  onValueChange={setSelectedCourse}
+                  value={selectedOffering}
+                  onValueChange={setSelectedOffering}
                 >
                   <SelectTrigger className="w-72">
-                    <SelectValue placeholder="Choose a course..." />
+                    <SelectValue
+                      placeholder={
+                        loadingOfferings ? "Loading..." : "Choose a course..."
+                      }
+                    />
                   </SelectTrigger>
                   <SelectContent>
-                    {courses.map((c) => (
-                      <SelectItem key={c.id} value={String(c.id)}>
-                        {c.name}
+                    {offerings.map((o) => (
+                      <SelectItem key={o.id} value={String(o.id)}>
+                        {o.course_name} — Sec {o.section_name} Y{o.section_year}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -141,10 +166,10 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
               </div>
             </div>
 
-            {selectedCourse && (
+            {selectedOffering && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
                 <button
-                  onClick={() => handleCourseReport("pdf", "full")}
+                  onClick={() => handleOfferingReport("pdf", "full")}
                   disabled={!!downloading}
                   className="flex items-center gap-3 p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all group"
                 >
@@ -159,7 +184,7 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                 </button>
 
                 <button
-                  onClick={() => handleCourseReport("csv", "full")}
+                  onClick={() => handleOfferingReport("csv", "full")}
                   disabled={!!downloading}
                   className="flex items-center gap-3 p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all group"
                 >
@@ -174,7 +199,7 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                 </button>
 
                 <button
-                  onClick={() => handleCourseReport("pdf", "weekly")}
+                  onClick={() => handleOfferingReport("pdf", "weekly")}
                   disabled={!!downloading}
                   className="flex items-center gap-3 p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all group"
                 >
@@ -190,7 +215,7 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
               </div>
             )}
 
-            {!selectedCourse && (
+            {!selectedOffering && (
               <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-xl">
                 <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-30" />
                 <p className="text-sm">Select a course to see report options</p>
@@ -211,16 +236,20 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                   Select Course
                 </p>
                 <Select
-                  value={selectedCourse}
-                  onValueChange={setSelectedCourse}
+                  value={selectedOffering}
+                  onValueChange={setSelectedOffering}
                 >
                   <SelectTrigger className="w-72">
-                    <SelectValue placeholder="Choose a course..." />
+                    <SelectValue
+                      placeholder={
+                        loadingOfferings ? "Loading..." : "Choose a course..."
+                      }
+                    />
                   </SelectTrigger>
                   <SelectContent>
-                    {courses.map((c) => (
-                      <SelectItem key={c.id} value={String(c.id)}>
-                        {c.name}
+                    {offerings.map((o) => (
+                      <SelectItem key={o.id} value={String(o.id)}>
+                        {o.course_name} — Sec {o.section_name} Y{o.section_year}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -228,60 +257,11 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
               </div>
             </div>
 
-            {selectedCourse && (
-              <div className="space-y-4 pt-2">
-                {/* Course Trend Chart */}
-                <div className="p-4 rounded-xl border border-border bg-card/50">
-                  <h4 className="text-sm font-medium mb-4">3-Month Attendance Trend</h4>
-                  {loadingTrend ? (
-                     <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">
-                       Loading trend data...
-                     </div>
-                  ) : trendData.length > 0 ? (
-                    <div className="h-[200px] w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={trendData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                          <XAxis 
-                            dataKey="name" 
-                            axisLine={false}
-                            tickLine={false}
-                            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} 
-                            dy={10}
-                          />
-                          <YAxis 
-                            axisLine={false}
-                            tickLine={false}
-                            tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                            domain={[0, 100]}
-                            tickFormatter={(val) => `${val}%`}
-                          />
-                          <Tooltip 
-                            contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))", fontSize: "12px", background: "hsl(var(--card))" }}
-                            formatter={(value: number) => [`${value}%`, "Attendance"]}
-                          />
-                          <Line 
-                            type="monotone" 
-                            dataKey="percentage" 
-                            stroke="hsl(var(--primary))" 
-                            strokeWidth={2}
-                            dot={{ fill: "hsl(var(--background))", stroke: "hsl(var(--primary))", strokeWidth: 2, r: 4 }}
-                            activeDot={{ r: 6 }}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  ) : (
-                    <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">
-                       No trend data available for this course.
-                     </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <button
-                    onClick={() => handleCourseReport("pdf", "full")}
-                    disabled={!!downloading}
+            {selectedOffering && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                <button
+                  onClick={() => handleOfferingReport("pdf", "full")}
+                  disabled={!!downloading}
                   className="flex items-center gap-3 p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all group"
                 >
                   <div className="p-2 rounded-lg bg-destructive/10 group-hover:bg-destructive/20 transition-colors">
@@ -295,7 +275,7 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                 </button>
 
                 <button
-                  onClick={() => handleCourseReport("csv", "full")}
+                  onClick={() => handleOfferingReport("csv", "full")}
                   disabled={!!downloading}
                   className="flex items-center gap-3 p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all group"
                 >
@@ -310,7 +290,7 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                 </button>
 
                 <button
-                  onClick={() => handleCourseReport("pdf", "weekly")}
+                  onClick={() => handleOfferingReport("pdf", "weekly")}
                   disabled={!!downloading}
                   className="flex items-center gap-3 p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all group"
                 >
@@ -324,10 +304,9 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                   <Download className="w-4 h-4 ml-auto text-muted-foreground group-hover:text-primary" />
                 </button>
               </div>
-              </div>
             )}
 
-            {!selectedCourse && (
+            {!selectedOffering && (
               <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-xl">
                 <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-30" />
                 <p className="text-sm">Select a course to see report options</p>
@@ -336,70 +315,92 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
           </div>
         )}
 
-        {/* Summary */}
+        {/* Summary — all offerings */}
         {activeReportTab === "summary" && (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Download a full summary report across all courses.
+              Download a full summary report across all course offerings.
             </p>
+            {loadingOfferings && (
+              <p className="text-sm text-muted-foreground">
+                Loading offerings...
+              </p>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-              {courses.map((course) => (
+              {offerings.map((offering) => (
                 <div
-                  key={course.id}
+                  key={offering.id}
                   className="flex items-center justify-between p-4 rounded-xl border border-border hover:border-primary/30 hover:bg-muted/30 transition-all"
                 >
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-primary/10">
                       <BookOpen className="w-4 h-4 text-primary" />
                     </div>
-                    <p className="font-medium text-sm">{course.name}</p>
+                    <div>
+                      <p className="font-medium text-sm">
+                        {offering.course_name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Sec {offering.section_name} · Y{offering.section_year}
+                      </p>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <button
                       onClick={async () => {
-                        setDownloading(`pdf-${course.id}`);
+                        setDownloading(`pdf-${offering.id}`);
                         try {
                           await downloadReportApi(
-                            "course",
-                            course.id,
+                            "offering",
+                            offering.id,
                             "pdf",
                             "full",
                           );
                           toast.success("Downloaded!");
-                        } catch {
-                          toast.error("Failed");
+                        } catch (err: any) {
+                          toast.error(err?.message || "Failed");
                         } finally {
                           setDownloading(null);
                         }
                       }}
-                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-primary hover:text-primary-foreground hover:border-primary transition-all"
+                      disabled={!!downloading}
+                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-primary hover:text-primary-foreground hover:border-primary transition-all disabled:opacity-50"
                     >
                       <Download className="w-3 h-3" /> PDF
                     </button>
                     <button
                       onClick={async () => {
-                        setDownloading(`csv-${course.id}`);
+                        setDownloading(`csv-${offering.id}`);
                         try {
                           await downloadReportApi(
-                            "course",
-                            course.id,
+                            "offering",
+                            offering.id,
                             "csv",
                             "full",
                           );
                           toast.success("Downloaded!");
-                        } catch {
-                          toast.error("Failed");
+                        } catch (err: any) {
+                          toast.error(err?.message || "Failed");
                         } finally {
                           setDownloading(null);
                         }
                       }}
-                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-primary hover:text-primary-foreground hover:border-primary transition-all"
+                      disabled={!!downloading}
+                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-primary hover:text-primary-foreground hover:border-primary transition-all disabled:opacity-50"
                     >
                       <Download className="w-3 h-3" /> CSV
                     </button>
                   </div>
                 </div>
               ))}
+              {!loadingOfferings && offerings.length === 0 && (
+                <div className="col-span-2 text-center py-12 text-muted-foreground border border-dashed border-border rounded-xl">
+                  <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">
+                    No course offerings found for current semester
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}

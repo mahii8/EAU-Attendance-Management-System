@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Shield,
+  Wrench,
 } from "lucide-react";
 import eauLogo from "@/assets/eau-logo.png";
 
@@ -32,6 +33,7 @@ const navItems = [
   { id: "user-roles", label: "User Roles", icon: Shield },
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "setup", label: "Setup", icon: Wrench },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 

@@ -38,9 +38,10 @@ import eauLogo from "@/assets/eau-logo.png";
 import {
   getProgrammesApi,
   getSectionsApi,
-  getCoursesApi,
-  getCourseStudentsApi,
-  getCourseSummaryApi,
+  getSemestersApi,
+  getOfferingsApi,
+  getOfferingStudentsApi,
+  getOfferingSummaryApi,
   submitAttendanceApi,
 } from "@/api/axios";
 
@@ -49,18 +50,27 @@ interface Programme {
   name: string;
   duration_years: number;
 }
+interface Semester {
+  id: number;
+  label: string;
+  number: number;
+  is_current: boolean;
+}
 interface Section {
   id: number;
   name: string;
   year: number;
-  semester: number;
-  academic_year: string;
 }
-interface Course {
+interface Offering {
   id: number;
-  name: string;
+  course_name: string;
+  course_code: string;
   total_credit_hours: string;
+  section_name: string;
+  section_year: number;
   programme_name: string;
+  teacher_name: string;
+  semester_label: string;
 }
 interface Student {
   id: number;
@@ -68,13 +78,13 @@ interface Student {
   student_id: string;
 }
 
-type AttendanceStatus = "present" | "late" | "exempted" | "absent";
+type AttendanceStatus = "present" | "late" | "excused" | "unexcused";
 
 const statusLabels: Record<AttendanceStatus, string> = {
   present: "Present",
   late: "Late",
-  exempted: "Exempted",
-  absent: "Absent",
+  excused: "Excused",
+  unexcused: "Absent",
 };
 
 const TeacherDashboard = () => {
@@ -82,13 +92,15 @@ const TeacherDashboard = () => {
 
   // Selection state
   const [programmes, setProgrammes] = useState<Programme[]>([]);
+  const [semesters, setSemesters] = useState<Semester[]>([]);
   const [selectedProgramme, setSelectedProgramme] = useState("");
+  const [selectedSemester, setSelectedSemester] = useState("");
   const [years, setYears] = useState<number[]>([]);
   const [selectedYear, setSelectedYear] = useState("");
   const [sections, setSections] = useState<Section[]>([]);
   const [selectedSection, setSelectedSection] = useState("");
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [selectedCourse, setSelectedCourse] = useState("");
+  const [offerings, setOfferings] = useState<Offering[]>([]);
+  const [selectedOffering, setSelectedOffering] = useState("");
 
   // Data state
   const [students, setStudents] = useState<Student[]>([]);
@@ -118,74 +130,80 @@ const TeacherDashboard = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Load programmes
+  // Load programmes and semesters on mount
   useEffect(() => {
-    getProgrammesApi().then((res) => setProgrammes(res.data));
+    Promise.all([getProgrammesApi(), getSemestersApi()]).then(
+      ([progRes, semRes]) => {
+        setProgrammes(progRes.data);
+        const sems = semRes.data || [];
+        setSemesters(sems);
+        // Auto-select current semester
+        const current = sems.find((s: Semester) => s.is_current);
+        if (current) setSelectedSemester(String(current.id));
+      },
+    );
   }, []);
 
   // When programme selected — build year list
   useEffect(() => {
     if (!selectedProgramme) return;
     const prog = programmes.find((p) => p.id === parseInt(selectedProgramme));
-    if (prog) {
+    if (prog)
       setYears(Array.from({ length: prog.duration_years }, (_, i) => i + 1));
-    }
     setSelectedYear("");
     setSelectedSection("");
-    setSelectedCourse("");
+    setSelectedOffering("");
     setSections([]);
-    setCourses([]);
+    setOfferings([]);
     setStudents([]);
   }, [selectedProgramme]);
 
   // When year selected — load sections
   useEffect(() => {
-    if (!selectedProgramme || !selectedYear) return;
+    if (!selectedProgramme || !selectedYear || !selectedSemester) return;
     getSectionsApi({
       programme: parseInt(selectedProgramme),
       year: parseInt(selectedYear),
-      semester: 2,
-      academic_year: "2024/25",
+      semester: parseInt(selectedSemester),
     }).then((res) => setSections(res.data));
     setSelectedSection("");
-    setSelectedCourse("");
-    setCourses([]);
+    setSelectedOffering("");
+    setOfferings([]);
     setStudents([]);
-  }, [selectedYear]);
+  }, [selectedYear, selectedSemester]);
 
-  // When section selected — load courses for this teacher
+  // When section selected — load course offerings for this teacher
   useEffect(() => {
-    if (!selectedSection || !selectedProgramme || !selectedYear) return;
-    getCoursesApi({
-      section: parseInt(selectedSection),
-      programme: parseInt(selectedProgramme),
-      year: parseInt(selectedYear),
-      semester: 2,
-    }).then((res) => setCourses(res.data));
-    setSelectedCourse("");
+    if (!selectedSection) return;
+    getOfferingsApi({ section: parseInt(selectedSection) }).then((res) => {
+      setOfferings(res.data);
+    });
+    setSelectedOffering("");
     setStudents([]);
   }, [selectedSection]);
 
-  // When course selected — load students and summary
+  // When offering selected — load students and summary
   useEffect(() => {
-    if (!selectedCourse || !selectedSection) return;
-    const courseId = parseInt(selectedCourse);
-    const sectionId = parseInt(selectedSection);
+    if (!selectedOffering) return;
+    const offeringId = parseInt(selectedOffering);
     Promise.all([
-      getCourseStudentsApi(courseId, sectionId),
-      getCourseSummaryApi(courseId, sectionId),
+      getOfferingStudentsApi(offeringId),
+      getOfferingSummaryApi(offeringId),
     ]).then(([studRes, sumRes]) => {
-      setStudents(studRes.data.students || []);
+      const studentList = studRes.data.students || [];
+      setStudents(studentList);
       setSummary(sumRes.data.summary || []);
       const defaults: Record<number, AttendanceStatus> = {};
-      (studRes.data.students || []).forEach((s: Student) => {
+      studentList.forEach((s: Student) => {
         defaults[s.id] = "present";
       });
       setAttendanceMap(defaults);
     });
-  }, [selectedCourse, selectedSection]);
+  }, [selectedOffering]);
 
-  const currentCourse = courses.find((c) => c.id === parseInt(selectedCourse));
+  const currentOffering = offerings.find(
+    (o) => o.id === parseInt(selectedOffering),
+  );
   const currentSection = sections.find(
     (s) => s.id === parseInt(selectedSection),
   );
@@ -197,7 +215,7 @@ const TeacherDashboard = () => {
   };
 
   const handleSubmit = async () => {
-    if (!selectedCourse || !selectedSection) return;
+    if (!selectedOffering) return;
     setSubmitting(true);
     try {
       const records = students.map((s) => ({
@@ -205,8 +223,7 @@ const TeacherDashboard = () => {
         status: attendanceMap[s.id] || "present",
       }));
       await submitAttendanceApi({
-        course_id: parseInt(selectedCourse),
-        section_id: parseInt(selectedSection),
+        course_offering_id: parseInt(selectedOffering),
         date: attendanceDate,
         session_type: sessionType,
         session_hours: parseFloat(sessionHours),
@@ -214,10 +231,7 @@ const TeacherDashboard = () => {
       });
       toast.success("Attendance submitted successfully!");
       setDialogOpen(false);
-      const sumRes = await getCourseSummaryApi(
-        parseInt(selectedCourse),
-        parseInt(selectedSection),
-      );
+      const sumRes = await getOfferingSummaryApi(parseInt(selectedOffering));
       setSummary(sumRes.data.summary || []);
     } catch {
       toast.error("Failed to submit attendance.");
@@ -226,7 +240,7 @@ const TeacherDashboard = () => {
     }
   };
 
-  const isReadyToLog = selectedCourse && selectedSection && students.length > 0;
+  const isReadyToLog = selectedOffering && students.length > 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -238,7 +252,7 @@ const TeacherDashboard = () => {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-muted-foreground hidden sm:block">
-            {user?.title ? `${user.title} ` : ''}{user?.first_name} {user?.last_name}
+            {user?.first_name} {user?.last_name}
           </span>
           <Button
             variant="ghost"
@@ -260,7 +274,29 @@ const TeacherDashboard = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+              {/* Semester */}
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Semester
+                </p>
+                <Select
+                  value={selectedSemester}
+                  onValueChange={setSelectedSemester}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select semester" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {semesters.map((s) => (
+                      <SelectItem key={s.id} value={String(s.id)}>
+                        {s.label} {s.is_current ? "✓" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
               {/* Programme */}
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -269,6 +305,7 @@ const TeacherDashboard = () => {
                 <Select
                   value={selectedProgramme}
                   onValueChange={setSelectedProgramme}
+                  disabled={!selectedSemester}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select programme" />
@@ -329,23 +366,23 @@ const TeacherDashboard = () => {
                 </Select>
               </div>
 
-              {/* Course */}
+              {/* Course Offering */}
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Course
                 </p>
                 <Select
-                  value={selectedCourse}
-                  onValueChange={setSelectedCourse}
-                  disabled={!selectedSection || courses.length === 0}
+                  value={selectedOffering}
+                  onValueChange={setSelectedOffering}
+                  disabled={!selectedSection || offerings.length === 0}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select course" />
                   </SelectTrigger>
                   <SelectContent>
-                    {courses.map((c) => (
-                      <SelectItem key={c.id} value={String(c.id)}>
-                        {c.name}
+                    {offerings.map((o) => (
+                      <SelectItem key={o.id} value={String(o.id)}>
+                        {o.course_name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -367,7 +404,7 @@ const TeacherDashboard = () => {
         </Card>
 
         {/* Stats */}
-        {isReadyToLog && currentCourse && (
+        {isReadyToLog && currentOffering && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card className="shadow-card border-border/50">
               <CardContent className="p-4 flex items-center gap-3">
@@ -393,7 +430,9 @@ const TeacherDashboard = () => {
                   <p className="text-2xl font-display font-bold">
                     {summary.length}
                   </p>
-                  <p className="text-xs text-muted-foreground">Total Records</p>
+                  <p className="text-xs text-muted-foreground">
+                    Student Records
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -404,7 +443,7 @@ const TeacherDashboard = () => {
                 </div>
                 <div>
                   <p className="text-2xl font-display font-bold">
-                    {currentCourse.total_credit_hours}
+                    {currentOffering.total_credit_hours}
                   </p>
                   <p className="text-xs text-muted-foreground">Credit Hours</p>
                 </div>
@@ -532,14 +571,17 @@ const TeacherDashboard = () => {
               </div>
             </div>
             <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground mb-2">
-              {user?.has_logged_in_before 
-                ? `Welcome back, ${user?.title ? user.title + ' ' : ''}${user?.first_name} ${user?.last_name}!`
-                : `Welcome ${user?.title ? user.title + ' ' : ''}${user?.first_name} ${user?.last_name}!`}
+              {user?.first_name
+                ? `Welcome, ${user?.first_name}!`
+                : "Welcome to Teacher Portal"}
             </h2>
             <p className="text-muted-foreground text-sm lg:text-base mb-6 max-w-sm">
-              Select a class to get started logging attendance and viewing student records.
+              Select a class to get started logging attendance and viewing
+              student records.
             </p>
             <div className="inline-flex items-center gap-2 text-xs lg:text-sm font-medium text-muted-foreground bg-muted/40 backdrop-blur-sm px-4 py-2 rounded-full border border-border/60 shadow-sm">
+              <span className="text-foreground/80">Semester</span>
+              <span className="text-muted-foreground/40">→</span>
               <span className="text-foreground/80">Programme</span>
               <span className="text-muted-foreground/40">→</span>
               <span className="text-foreground/80">Year</span>
@@ -562,7 +604,8 @@ const TeacherDashboard = () => {
                   Log Attendance
                 </DialogTitle>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  {currentCourse?.name} — Section {currentSection?.name}
+                  {currentOffering?.course_name} — Section{" "}
+                  {currentSection?.name}
                 </p>
               </div>
               <div className="flex items-center gap-1.5 bg-muted px-3 py-1.5 rounded-lg text-sm font-mono">
@@ -664,8 +707,8 @@ const TeacherDashboard = () => {
                             [
                               "present",
                               "late",
-                              "exempted",
-                              "absent",
+                              "excused",
+                              "unexcused",
                             ] as AttendanceStatus[]
                           ).map((s) => (
                             <button
@@ -677,22 +720,32 @@ const TeacherDashboard = () => {
                                 }))
                               }
                               className={`transition-all ${
-                                shortName 
-                                  ? "w-8 h-8 rounded-full flex items-center justify-center p-0 text-sm font-semibold ring-offset-2" 
+                                shortName
+                                  ? "w-8 h-8 rounded-full flex items-center justify-center p-0 text-sm font-semibold ring-offset-2"
                                   : "px-3 py-1.5 rounded-full text-xs font-semibold border"
                               } ${
                                 attendanceMap[student.id] === s
                                   ? s === "present"
-                                    ? shortName ? "bg-[#22c55e] text-white ring-2 ring-[#22c55e]/30" : "bg-[#22c55e] text-white border-[#22c55e]"
+                                    ? shortName
+                                      ? "bg-[#22c55e] text-white ring-2 ring-[#22c55e]/30"
+                                      : "bg-[#22c55e] text-white border-[#22c55e]"
                                     : s === "late"
-                                      ? shortName ? "bg-[#fef08a] text-[#ca8a04] ring-2 ring-[#fef08a]/50" : "bg-[#fef08a] text-[#ca8a04] border-[#fde047]"
-                                      : s === "exempted"
-                                        ? shortName ? "bg-[#64748b] text-white ring-2 ring-[#64748b]/50" : "bg-[#64748b] text-white border-[#475569]"
-                                        : shortName ? "bg-[#fee2e2] text-[#ef4444] ring-2 ring-[#fca5a5]/50" : "bg-[#fee2e2] text-[#ef4444] border-[#fca5a5]"
+                                      ? shortName
+                                        ? "bg-[#fef08a] text-[#ca8a04] ring-2 ring-[#fef08a]/50"
+                                        : "bg-[#fef08a] text-[#ca8a04] border-[#fde047]"
+                                      : s === "excused"
+                                        ? shortName
+                                          ? "bg-[#64748b] text-white ring-2 ring-[#64748b]/50"
+                                          : "bg-[#64748b] text-white border-[#475569]"
+                                        : shortName
+                                          ? "bg-[#fee2e2] text-[#ef4444] ring-2 ring-[#fca5a5]/50"
+                                          : "bg-[#fee2e2] text-[#ef4444] border-[#fca5a5]"
                                   : "bg-background text-muted-foreground border-border hover:bg-muted/50"
                               }`}
                             >
-                              {shortName ? statusLabels[s].charAt(0) : statusLabels[s]}
+                              {shortName
+                                ? statusLabels[s].charAt(0)
+                                : statusLabels[s]}
                             </button>
                           ))}
                         </div>

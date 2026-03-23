@@ -13,13 +13,16 @@ import StudentsTab from "@/components/admin/StudentsTab";
 import AttendanceTab from "@/components/admin/AttendanceTab";
 import UserRolesTab from "@/components/admin/UserRolesTab";
 import SettingsTab from "@/components/admin/SettingsTab";
+import SetupTab from "@/components/admin/SetupTab";
 import {
   getCoursesApi,
   getStudentsApi,
-  getAttendanceApi,
   getNotificationsApi,
   markNotificationReadApi,
   getProgrammesApi,
+  getStatsApi,
+  getAtRiskApi,
+  getSemestersApi,
 } from "@/api/axios";
 
 const tabTitles: Record<string, string> = {
@@ -32,6 +35,7 @@ const tabTitles: Record<string, string> = {
   reports: "Reports & Analytics",
   notifications: "Notifications",
   settings: "Settings",
+  setup: "System Setup",
 };
 
 export interface Course {
@@ -39,10 +43,12 @@ export interface Course {
   name: string;
   code: string;
   total_credit_hours: string;
-  minimum_required_hours: number;
+  minimum_required_hours?: number;
+  minimum_attendance_percent?: number;
   programme_name: string;
   year: number;
-  semester: number;
+  semester?: number;
+  is_active?: boolean;
 }
 
 export interface Programme {
@@ -65,40 +71,56 @@ const AdminDashboard = () => {
   const [courses, setCourses] = useState<Course[]>([]);
   const [programmes, setProgrammes] = useState<Programme[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [totalStudents, setTotalStudents] = useState(0);
-  const [totalRecords, setTotalRecords] = useState(0);
-  const [atRiskCount, setAtRiskCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [students, setStudents] = useState<{id: number; full_name: string; student_id: string}[]>([]);
-  const [statusCounts, setStatusCounts] = useState({ present: 0, late: 0, exempted: 0, absent: 0 });
+  const [students, setStudents] = useState<
+    { id: number; full_name: string; student_id: string }[]
+  >([]);
+
+  // Stats from the new /api/stats/ endpoint
+  const [stats, setStats] = useState({
+    total_students: 0,
+    total_courses: 0,
+    active_enrollments: 0,
+    total_programmes: 0,
+    status_distribution: { present: 0, late: 0, excused: 0, unexcused: 0 },
+  });
+  const [atRiskCount, setAtRiskCount] = useState(0);
+  const [currentSemesterId, setCurrentSemesterId] = useState<
+    number | undefined
+  >();
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [coursesRes, studentsRes, notifRes, programmesRes] =
-          await Promise.all([
-            getCoursesApi(),
-            getStudentsApi(),
-            getNotificationsApi(),
-            getProgrammesApi(),
-          ]);
+        // Get current semester first
+        const semRes = await getSemestersApi({ current: true });
+        const currentSemester = semRes.data?.[0];
+        if (currentSemester) setCurrentSemesterId(currentSemester.id);
+
+        const semId = currentSemester?.id;
+
+        const [
+          coursesRes,
+          studentsRes,
+          notifRes,
+          programmesRes,
+          statsRes,
+          atRiskRes,
+        ] = await Promise.all([
+          getCoursesApi({ active_only: true }),
+          getStudentsApi({ active_only: true }),
+          getNotificationsApi(),
+          getProgrammesApi({ active_only: true }),
+          getStatsApi(semId ? { semester: semId } : {}),
+          getAtRiskApi(semId ? { semester: semId } : {}),
+        ]);
 
         setCourses(coursesRes.data);
         setProgrammes(programmesRes.data);
-        setTotalStudents(studentsRes.data.length);
         setStudents(studentsRes.data || []);
         setNotifications(notifRes.data.notifications || []);
-
-        // Get attendance records count
-        const attendanceRes = await getAttendanceApi();
-        const records: any[] = attendanceRes.data || [];
-        setTotalRecords(records.length);
-        setStatusCounts({
-          present:  records.filter((r) => r.status === "present").length,
-          late:     records.filter((r) => r.status === "late").length,
-          exempted: records.filter((r) => r.status === "exempted").length,
-          absent:   records.filter((r) => r.status === "absent").length,
-        });
+        setStats(statsRes.data);
+        setAtRiskCount(atRiskRes.data.count || 0);
       } catch (e) {
         console.error(e);
       } finally {
@@ -111,6 +133,13 @@ const AdminDashboard = () => {
   const handleMarkRead = async (id: number) => {
     await markNotificationReadApi(id);
     setNotifications((prev) => prev.filter((n) => n.id !== id));
+  };
+
+  const statusCounts = {
+    present: stats.status_distribution?.present || 0,
+    late: stats.status_distribution?.late || 0,
+    exempted: stats.status_distribution?.excused || 0,
+    absent: stats.status_distribution?.unexcused || 0,
   };
 
   return (
@@ -160,10 +189,10 @@ const AdminDashboard = () => {
           {activeTab === "overview" && (
             <>
               <StatsCards
-                totalStudents={totalStudents}
-                totalCourses={courses.length}
+                totalStudents={stats.total_students}
+                totalCourses={stats.total_courses}
                 atRiskCount={atRiskCount}
-                totalRecords={totalRecords}
+                totalRecords={stats.active_enrollments}
               />
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <div className="xl:col-span-2">
@@ -178,7 +207,7 @@ const AdminDashboard = () => {
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <div className="xl:col-span-2">
-                  <AtRiskTable students={[]} />
+                  <AtRiskTable semesterId={currentSemesterId} />
                 </div>
                 <RecentActivity notifications={notifications} />
               </div>
@@ -196,7 +225,9 @@ const AdminDashboard = () => {
           {activeTab === "attendance" && (
             <AttendanceTab courses={courses} programmes={programmes} />
           )}
-          {activeTab === "at-risk" && <AtRiskTable students={[]} fullPage />}
+          {activeTab === "at-risk" && (
+            <AtRiskTable semesterId={currentSemesterId} fullPage />
+          )}
           {activeTab === "user-roles" && <UserRolesTab />}
           {activeTab === "reports" && <ReportsTab courses={courses} />}
           {activeTab === "notifications" && (
@@ -206,6 +237,7 @@ const AdminDashboard = () => {
             />
           )}
           {activeTab === "settings" && <SettingsTab />}
+          {activeTab === "setup" && <SetupTab />}
         </main>
       </div>
     </div>

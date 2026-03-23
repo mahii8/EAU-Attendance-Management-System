@@ -1,47 +1,69 @@
 from django.urls import path
 from . import views
+from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
-    # Auth
+    # ── Auth ──────────────────────────────────────────
     path('auth/login/', views.LoginView.as_view()),
     path('auth/me/', views.MeView.as_view()),
+    path('auth/refresh/', TokenRefreshView.as_view()),
 
-    # Programmes & Sections
+    # ── Programmes ────────────────────────────────────
     path('programmes/', views.ProgrammeListView.as_view()),
-    path('sections/', views.SectionListView.as_view()),
+    path('programmes/<int:programme_id>/', views.ProgrammeDetailView.as_view()),
 
-    # Courses
+    # ── Courses (templates) ───────────────────────────
     path('courses/', views.CourseListView.as_view()),
-    path('courses/<int:course_id>/', views.CourseUpdateView.as_view()),
-    path('courses/<int:course_id>/students/', views.CourseStudentsView.as_view()),
-    path('courses/<int:course_id>/summary/', views.AttendanceSummaryView.as_view()),
-    path('courses/<int:course_id>/trend/', views.CourseTrendView.as_view()),
+    path('courses/<int:course_id>/', views.CourseDetailView.as_view()),
 
-    # Attendance
+    # ── Academic Years ────────────────────────────────
+    path('academic-years/', views.AcademicYearListView.as_view()),
+    path('academic-years/<int:year_id>/', views.AcademicYearDetailView.as_view()),
+
+    # ── Semesters ─────────────────────────────────────
+    path('semesters/', views.SemesterListView.as_view()),
+    path('semesters/<int:semester_id>/', views.SemesterDetailView.as_view()),
+
+    # ── Sections ──────────────────────────────────────
+    path('sections/', views.SectionListView.as_view()),
+    path('sections/<int:section_id>/', views.SectionDetailView.as_view()),
+
+    # ── Students ──────────────────────────────────────
+    path('students/', views.StudentListView.as_view()),
+    path('students/<int:student_id>/', views.StudentDetailView.as_view()),
+    path('students/import/', views.StudentBulkImportView.as_view()),
+
+    # ── Enrollments ───────────────────────────────────
+    path('enrollments/', views.EnrollmentListView.as_view()),
+    path('enrollments/<int:enrollment_id>/', views.EnrollmentDetailView.as_view()),
+    path('enrollments/bulk/', views.BulkEnrollView.as_view()),
+
+    # ── Course Offerings ──────────────────────────────
+    path('offerings/', views.CourseOfferingListView.as_view()),
+    path('offerings/<int:offering_id>/', views.CourseOfferingDetailView.as_view()),
+    path('offerings/<int:offering_id>/students/', views.CourseOfferingStudentsView.as_view()),
+    path('offerings/<int:offering_id>/summary/', views.CourseOfferingSummaryView.as_view()),
+
+    # ── Attendance ────────────────────────────────────
     path('attendance/', views.AttendanceListView.as_view()),
     path('attendance/submit/', views.AttendanceSubmitView.as_view()),
 
-    # Students
-    path('students/', views.StudentListView.as_view()),
-    path('students/<int:student_id>/', views.StudentUpdateView.as_view()),
+    # ── Dashboard ─────────────────────────────────────
+    path('stats/', views.StatsView.as_view()),
+    path('at-risk/', views.AtRiskView.as_view()),
 
-    # Users
+    # ── Users ─────────────────────────────────────────
     path('users/', views.UserListView.as_view()),
-    path('users/<int:user_id>/', views.UserUpdateView.as_view()),
+    path('users/<int:user_id>/', views.UserDetailView.as_view()),
 
-    # Notifications
+    # ── Notifications ─────────────────────────────────
     path('notifications/', views.NotificationListView.as_view()),
     path('notifications/<int:notification_id>/read/', views.NotificationMarkReadView.as_view()),
 
-    # Settings
+    # ── Settings ──────────────────────────────────────
     path('settings/', views.SystemSettingsView.as_view()),
 
-    # Reports
-    path('reports/course/<int:course_id>/', views.CourseReportView.as_view()),
+    # ── Reports ───────────────────────────────────────
+    path('reports/offering/<int:offering_id>/', views.CourseOfferingReportView.as_view()),
     path('reports/student/<int:student_id>/', views.StudentReportView.as_view()),
-    path('reports/download/', views.DownloadReportView.as_view()),
-
-    # Portals
-    path('student/dashboard/', views.StudentDashboardView.as_view()),
-    path('parent/dashboard/', views.ParentDashboardView.as_view()),
 ]

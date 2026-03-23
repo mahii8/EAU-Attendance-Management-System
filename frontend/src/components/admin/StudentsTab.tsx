@@ -16,6 +16,8 @@ import {
   updateStudentApi,
   deleteStudentApi,
   getSectionsApi,
+  getSemestersApi,
+  bulkImportStudentsApi,
 } from "@/api/axios";
 
 interface Programme {
@@ -23,11 +25,17 @@ interface Programme {
   name: string;
   duration_years: number;
 }
+interface Semester {
+  id: number;
+  label: string;
+  number: number;
+  is_current: boolean;
+}
 interface Section {
   id: number;
   name: string;
   year: number;
-  semester: number;
+  semester_label: string;
 }
 interface Student {
   id: number;
@@ -37,9 +45,15 @@ interface Student {
   email: string;
   parent_email: string;
   parent_telegram: string;
-  section_name: string;
-  section_year: number;
   programme_name: string;
+  is_active: boolean;
+  current_section: {
+    section_id: number;
+    section_name: string;
+    year: number;
+    programme: string;
+    semester: string;
+  } | null;
 }
 
 interface StudentsTabProps {
@@ -50,13 +64,13 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
   const [students, setStudents] = useState<Student[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [semesters, setSemesters] = useState<Semester[]>([]);
 
   // Filters
   const [filterProgramme, setFilterProgramme] = useState("");
-  const [filterYear, setFilterYear] = useState("");
+  const [filterSemester, setFilterSemester] = useState("");
   const [filterSection, setFilterSection] = useState("");
   const [sections, setSections] = useState<Section[]>([]);
-  const [years, setYears] = useState<number[]>([]);
 
   // Edit modal
   const [editOpen, setEditOpen] = useState(false);
@@ -79,17 +93,21 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
     email: "",
     parent_email: "",
     parent_telegram: "",
+    programme_id: "",
     section_id: "",
   });
+  const [addSemester, setAddSemester] = useState("");
   const [addSections, setAddSections] = useState<Section[]>([]);
-  const [addProgramme, setAddProgramme] = useState("");
   const [addYear, setAddYear] = useState("");
   const [adding, setAdding] = useState(false);
 
   // Bulk import
   const [importOpen, setImportOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
 
+  // Load semesters on mount
   useEffect(() => {
+    getSemestersApi().then((res) => setSemesters(res.data || []));
     fetchStudents();
   }, []);
 
@@ -98,7 +116,7 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
       setLoading(true);
       const params: any = {};
       if (filterProgramme) params.programme = filterProgramme;
-      if (filterYear) params.year = filterYear;
+      if (filterSemester) params.semester = filterSemester;
       if (filterSection) params.section = filterSection;
       if (search) params.search = search;
       const res = await getStudentsApi(params);
@@ -112,49 +130,33 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
 
   useEffect(() => {
     fetchStudents();
-  }, [filterProgramme, filterYear, filterSection]);
+  }, [filterProgramme, filterSemester, filterSection]);
 
-  // When filter programme changes — build year list
+  // When semester + programme changes, load sections
   useEffect(() => {
-    if (!filterProgramme) {
-      setYears([]);
-      setSections([]);
-      setFilterYear("");
-      setFilterSection("");
-      return;
-    }
-    const prog = programmes.find((p) => p.id === parseInt(filterProgramme));
-    if (prog)
-      setYears(Array.from({ length: prog.duration_years }, (_, i) => i + 1));
-    setFilterYear("");
-    setFilterSection("");
-  }, [filterProgramme]);
-
-  // When filter year changes — load sections
-  useEffect(() => {
-    if (!filterProgramme || !filterYear) {
+    if (!filterSemester) {
       setSections([]);
       setFilterSection("");
       return;
     }
-    getSectionsApi({
-      programme: parseInt(filterProgramme),
-      year: parseInt(filterYear),
-    }).then((res) => setSections(res.data));
+    const params: any = { semester: filterSemester };
+    if (filterProgramme) params.programme = filterProgramme;
+    getSectionsApi(params).then((res) => setSections(res.data));
     setFilterSection("");
-  }, [filterYear]);
+  }, [filterSemester, filterProgramme]);
 
-  // Add modal — when programme/year changes load sections
+  // Add modal — load sections when semester + year selected
   useEffect(() => {
-    if (!addProgramme || !addYear) {
+    if (!addSemester || !addYear || !addForm.programme_id) {
       setAddSections([]);
       return;
     }
     getSectionsApi({
-      programme: parseInt(addProgramme),
+      semester: parseInt(addSemester),
+      programme: parseInt(addForm.programme_id),
       year: parseInt(addYear),
     }).then((res) => setAddSections(res.data));
-  }, [addProgramme, addYear]);
+  }, [addSemester, addYear, addForm.programme_id]);
 
   const openEdit = (student: Student) => {
     setEditStudent(student);
@@ -186,13 +188,14 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this student?")) return;
+    if (!confirm("Deactivate this student? Their records will be kept."))
+      return;
     try {
       await deleteStudentApi(id);
       setStudents((prev) => prev.filter((s) => s.id !== id));
-      toast.success("Student deleted!");
+      toast.success("Student deactivated.");
     } catch {
-      toast.error("Failed to delete student");
+      toast.error("Failed to deactivate student");
     }
   };
 
@@ -201,23 +204,25 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
       !addForm.first_name ||
       !addForm.last_name ||
       !addForm.student_id ||
-      !addForm.email ||
-      !addForm.section_id
+      !addForm.email
     ) {
       toast.error("Please fill all required fields");
       return;
     }
     setAdding(true);
     try {
-      const res = await createStudentApi({
+      const payload: any = {
         first_name: addForm.first_name,
         last_name: addForm.last_name,
         student_id: addForm.student_id,
         email: addForm.email,
         parent_email: addForm.parent_email,
         parent_telegram: addForm.parent_telegram,
-        section_id: parseInt(addForm.section_id),
-      });
+      };
+      if (addForm.programme_id)
+        payload.programme_id = parseInt(addForm.programme_id);
+      if (addForm.section_id) payload.section_id = parseInt(addForm.section_id);
+      const res = await createStudentApi(payload);
       setStudents((prev) => [...prev, res.data]);
       toast.success("Student added!");
       setAddOpen(false);
@@ -228,9 +233,10 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
         email: "",
         parent_email: "",
         parent_telegram: "",
+        programme_id: "",
         section_id: "",
       });
-      setAddProgramme("");
+      setAddSemester("");
       setAddYear("");
     } catch (e: any) {
       toast.error(e?.response?.data?.error || "Failed to add student");
@@ -239,41 +245,20 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
     }
   };
 
-  const handleBulkImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBulkImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const text = ev.target?.result as string;
-      const lines = text.split("\n").filter(Boolean);
-      const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
-      let imported = 0;
-      for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(",").map((v) => v.trim());
-        const row: any = {};
-        headers.forEach((h, idx) => {
-          row[h] = values[idx] || "";
-        });
-        if (!row["first_name"] || !row["student_id"] || !row["section_id"])
-          continue;
-        try {
-          await createStudentApi({
-            first_name: row["first_name"],
-            last_name: row["last_name"] || "",
-            student_id: row["student_id"],
-            email: row["email"] || `${row["student_id"]}@eau.edu.et`,
-            parent_email: row["parent_email"] || "",
-            parent_telegram: row["parent_telegram"] || "",
-            section_id: parseInt(row["section_id"]),
-          });
-          imported++;
-        } catch {}
-      }
-      toast.success(`Imported ${imported} students!`);
+    setImporting(true);
+    try {
+      const res = await bulkImportStudentsApi(file);
+      toast.success(res.data.message);
       fetchStudents();
       setImportOpen(false);
-    };
-    reader.readAsText(file);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || "Import failed");
+    } finally {
+      setImporting(false);
+    }
   };
 
   const filtered = students.filter((s) => {
@@ -286,11 +271,11 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
     );
   });
 
-  const addYears = addProgramme
+  const addYears = addForm.programme_id
     ? Array.from(
         {
           length:
-            programmes.find((p) => p.id === parseInt(addProgramme))
+            programmes.find((p) => p.id === parseInt(addForm.programme_id))
               ?.duration_years || 4,
         },
         (_, i) => i + 1,
@@ -339,32 +324,34 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
                   </option>
                 ))}
               </select>
+
               <select
-                value={filterYear}
-                onChange={(e) => setFilterYear(e.target.value)}
-                disabled={!filterProgramme}
-                className="border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                value={filterSemester}
+                onChange={(e) => setFilterSemester(e.target.value)}
+                className="border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
               >
-                <option value="">All Years</option>
-                {years.map((y) => (
-                  <option key={y} value={y}>
-                    Year {y}
+                <option value="">All Semesters</option>
+                {semesters.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label} {s.is_current ? "(Current)" : ""}
                   </option>
                 ))}
               </select>
+
               <select
                 value={filterSection}
                 onChange={(e) => setFilterSection(e.target.value)}
-                disabled={!filterYear}
+                disabled={!filterSemester}
                 className="border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
               >
                 <option value="">All Sections</option>
                 {sections.map((s) => (
                   <option key={s.id} value={s.id}>
-                    Section {s.name}
+                    Section {s.name} (Y{s.year})
                   </option>
                 ))}
               </select>
+
               <div className="relative flex-1 min-w-48">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
@@ -389,7 +376,7 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
                   University ID
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
-                  Programme / Year
+                  Programme / Section
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
                   Email
@@ -435,10 +422,15 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
                     {s.student_id}
                   </td>
                   <td className="px-6 py-4 text-muted-foreground text-xs">
-                    <p>{s.programme_name}</p>
-                    <p className="text-muted-foreground/60">
-                      Year {s.section_year} · Section {s.section_name}
+                    <p>
+                      {s.current_section?.programme || s.programme_name || "—"}
                     </p>
+                    {s.current_section && (
+                      <p className="text-muted-foreground/60">
+                        Y{s.current_section.year} · Sec{" "}
+                        {s.current_section.section_name}
+                      </p>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-muted-foreground">{s.email}</td>
                   <td className="px-6 py-4 text-muted-foreground">
@@ -622,15 +614,22 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
                 />
               </div>
             </div>
-            {/* Section selector */}
-            <div className="grid grid-cols-3 gap-3">
+
+            {/* Programme → Semester → Year → Section */}
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Programme *
+                  Programme
                 </p>
                 <select
-                  value={addProgramme}
-                  onChange={(e) => setAddProgramme(e.target.value)}
+                  value={addForm.programme_id}
+                  onChange={(e) =>
+                    setAddForm({
+                      ...addForm,
+                      programme_id: e.target.value,
+                      section_id: "",
+                    })
+                  }
                   className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
                 >
                   <option value="">Select</option>
@@ -643,12 +642,32 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Year *
+                  Semester
+                </p>
+                <select
+                  value={addSemester}
+                  onChange={(e) => setAddSemester(e.target.value)}
+                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="">Select</option>
+                  {semesters.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                      {s.is_current ? " (Current)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Year
                 </p>
                 <select
                   value={addYear}
                   onChange={(e) => setAddYear(e.target.value)}
-                  disabled={!addProgramme}
+                  disabled={!addForm.programme_id}
                   className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
                 >
                   <option value="">Select</option>
@@ -661,14 +680,14 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Section *
+                  Section
                 </p>
                 <select
                   value={addForm.section_id}
                   onChange={(e) =>
                     setAddForm({ ...addForm, section_id: e.target.value })
                   }
-                  disabled={!addYear}
+                  disabled={!addSections.length}
                   className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
                 >
                   <option value="">Select</option>
@@ -680,6 +699,7 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
                 </select>
               </div>
             </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -737,12 +757,14 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
                 CSV Format Required:
               </p>
               <p className="font-mono text-xs">
-                first_name, last_name, student_id, email, section_id,
-                parent_email, parent_telegram
+                first_name, last_name, student_id, email, programme_code,
+                section_id, parent_email, parent_telegram
               </p>
               <p>
-                The <span className="font-medium">section_id</span> column must
-                be the numeric ID of the section from the database.
+                The <span className="font-medium">programme_code</span> must
+                match the programme code in the system. The{" "}
+                <span className="font-medium">section_id</span> is optional —
+                students can be enrolled later.
               </p>
             </div>
             <div className="space-y-1.5">
@@ -753,8 +775,12 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
                 type="file"
                 accept=".csv"
                 onChange={handleBulkImport}
+                disabled={importing}
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none"
               />
+              {importing && (
+                <p className="text-xs text-muted-foreground">Importing...</p>
+              )}
             </div>
             <div className="flex justify-end">
               <Button variant="outline" onClick={() => setImportOpen(false)}>

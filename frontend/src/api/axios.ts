@@ -40,61 +40,96 @@ api.interceptors.response.use(
   },
 );
 
-// Auth
+// ── Auth ──────────────────────────────────────────────────────
 export const loginApi = (username: string, password: string) =>
   api.post("/auth/login/", { username, password });
 export const getMeApi = () => api.get("/auth/me/");
 
-// Programmes & Sections
-export const getProgrammesApi = () => api.get("/programmes/");
-export const getSectionsApi = (params?: {
-  programme?: number;
-  year?: number;
-  semester?: number;
-  academic_year?: string;
-}) => api.get("/sections/", { params });
+// ── Programmes ────────────────────────────────────────────────
+export const getProgrammesApi = (params?: { active_only?: boolean }) =>
+  api.get("/programmes/", { params });
+export const createProgrammeApi = (data: {
+  name: string;
+  code?: string;
+  duration_years?: number;
+}) => api.post("/programmes/", data);
+export const updateProgrammeApi = (id: number, data: any) =>
+  api.patch(`/programmes/${id}/`, data);
+export const deleteProgrammeApi = (id: number) =>
+  api.delete(`/programmes/${id}/`);
 
-// Courses
+// ── Courses (templates) ───────────────────────────────────────
 export const getCoursesApi = (params?: {
   programme?: number;
   year?: number;
-  semester?: number;
-  section?: number;
+  active_only?: boolean;
 }) => api.get("/courses/", { params });
-
 export const createCourseApi = (data: {
   name: string;
   code?: string;
   total_credit_hours: number;
   programme_id: number;
   year: number;
-  semester: number;
+  minimum_attendance_percent?: number;
 }) => api.post("/courses/", data);
+export const updateCourseApi = (id: number, data: any) =>
+  api.patch(`/courses/${id}/`, data);
+export const deleteCourseApi = (id: number) => api.delete(`/courses/${id}/`);
 
-export const updateCourseApi = (courseId: number, data: any) =>
-  api.patch(`/courses/${courseId}/`, data);
+// ── Academic Years ────────────────────────────────────────────
+export const getAcademicYearsApi = () => api.get("/academic-years/");
+export const createAcademicYearApi = (data: {
+  name: string;
+  start_date: string;
+  end_date: string;
+  is_current?: boolean;
+}) => api.post("/academic-years/", data);
+export const updateAcademicYearApi = (id: number, data: any) =>
+  api.patch(`/academic-years/${id}/`, data);
+export const deleteAcademicYearApi = (id: number) =>
+  api.delete(`/academic-years/${id}/`);
 
-export const getCourseStudentsApi = (courseId: number, sectionId?: number) =>
-  api.get(`/courses/${courseId}/students/`, {
-    params: sectionId ? { section: sectionId } : {},
-  });
+// ── Semesters ─────────────────────────────────────────────────
+export const getSemestersApi = (params?: {
+  academic_year?: number;
+  current?: boolean;
+}) => api.get("/semesters/", { params });
+export const createSemesterApi = (data: {
+  academic_year_id: number;
+  number: number;
+  start_date: string;
+  end_date: string;
+  is_current?: boolean;
+}) => api.post("/semesters/", data);
+export const updateSemesterApi = (id: number, data: any) =>
+  api.patch(`/semesters/${id}/`, data);
+export const deleteSemesterApi = (id: number) =>
+  api.delete(`/semesters/${id}/`);
 
-export const getCourseSummaryApi = (courseId: number, sectionId?: number) =>
-  api.get(`/courses/${courseId}/summary/`, {
-    params: sectionId ? { section: sectionId } : {},
-  });
-
-export const getCourseTrendApi = (courseId: number, months: number = 3) =>
-  api.get(`/courses/${courseId}/trend/`, { params: { months } });
-
-// Students
-export const getStudentsApi = (params?: {
-  section?: number;
+// ── Sections ──────────────────────────────────────────────────
+export const getSectionsApi = (params?: {
+  semester?: number;
   programme?: number;
   year?: number;
+}) => api.get("/sections/", { params });
+export const createSectionApi = (data: {
+  name: string;
+  programme_id: number;
+  year: number;
+  semester_id: number;
+}) => api.post("/sections/", data);
+export const updateSectionApi = (id: number, data: any) =>
+  api.patch(`/sections/${id}/`, data);
+export const deleteSectionApi = (id: number) => api.delete(`/sections/${id}/`);
+
+// ── Students ──────────────────────────────────────────────────
+export const getStudentsApi = (params?: {
+  programme?: number;
+  semester?: number;
+  section?: number;
+  active_only?: boolean;
   search?: string;
 }) => api.get("/students/", { params });
-
 export const createStudentApi = (data: {
   first_name: string;
   last_name: string;
@@ -102,117 +137,176 @@ export const createStudentApi = (data: {
   email: string;
   parent_email?: string;
   parent_telegram?: string;
-  section_id: number;
+  programme_id?: number;
+  section_id?: number;
 }) => api.post("/students/", data);
+export const updateStudentApi = (id: number, data: any) =>
+  api.patch(`/students/${id}/`, data);
+export const deleteStudentApi = (id: number) => api.delete(`/students/${id}/`);
+export const bulkImportStudentsApi = (file: File) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return api.post("/students/import/", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
 
-export const updateStudentApi = (studentId: number, data: any) =>
-  api.patch(`/students/${studentId}/`, data);
+// ── Enrollments ───────────────────────────────────────────────
+export const getEnrollmentsApi = (params?: {
+  section?: number;
+  student?: number;
+  semester?: number;
+  status?: string;
+}) => api.get("/enrollments/", { params });
+export const createEnrollmentApi = (data: {
+  student_id: number;
+  section_id: number;
+}) => api.post("/enrollments/", data);
+export const updateEnrollmentApi = (id: number, data: { status: string }) =>
+  api.patch(`/enrollments/${id}/`, data);
+export const deleteEnrollmentApi = (id: number) =>
+  api.delete(`/enrollments/${id}/`);
+export const bulkEnrollApi = (data: {
+  section_id: number;
+  student_ids: number[];
+}) => api.post("/enrollments/bulk/", data);
 
-export const deleteStudentApi = (studentId: number) =>
-  api.delete(`/students/${studentId}/`);
-
-// Attendance
-export const getAttendanceApi = (params?: {
-  course?: number;
-  date?: string;
+// ── Course Offerings ──────────────────────────────────────────
+export const getOfferingsApi = (params?: {
+  semester?: number;
   section?: number;
   programme?: number;
-  year?: number;
-  search?: string;
-}) => api.get("/attendance/", { params });
-
-export const submitAttendanceApi = (data: {
+  teacher?: number;
+}) => api.get("/offerings/", { params });
+export const createOfferingApi = (data: {
   course_id: number;
   section_id: number;
+  teacher_id?: number;
+}) => api.post("/offerings/", data);
+export const updateOfferingApi = (id: number, data: { teacher_id?: number }) =>
+  api.patch(`/offerings/${id}/`, data);
+export const deleteOfferingApi = (id: number) =>
+  api.delete(`/offerings/${id}/`);
+export const getOfferingStudentsApi = (offeringId: number) =>
+  api.get(`/offerings/${offeringId}/students/`);
+export const getOfferingSummaryApi = (offeringId: number) =>
+  api.get(`/offerings/${offeringId}/summary/`);
+
+// ── Attendance ────────────────────────────────────────────────
+export const getAttendanceApi = (params?: {
+  offering?: number;
+  section?: number;
+  semester?: number;
+  programme?: number;
+  date?: string;
+  search?: string;
+}) => api.get("/attendance/", { params });
+export const submitAttendanceApi = (data: {
+  course_offering_id: number;
   date: string;
   session_type: string;
   session_hours: number;
   records: { student_id: number; status: string }[];
 }) => api.post("/attendance/submit/", data);
 
-// Users
-export const getUsersApi = () => api.get("/users/");
+// ── Dashboard ─────────────────────────────────────────────────
+export const getStatsApi = (params?: { semester?: number }) =>
+  api.get("/stats/", { params });
+export const getAtRiskApi = (params?: {
+  semester?: number;
+  programme?: number;
+}) => api.get("/at-risk/", { params });
 
+// ── Users ─────────────────────────────────────────────────────
+export const getUsersApi = (params?: { role?: string }) =>
+  api.get("/users/", { params });
 export const createUserApi = (data: {
   username: string;
+  staff_id?: string;
   first_name: string;
   last_name: string;
   email: string;
   role: string;
   password: string;
 }) => api.post("/users/", data);
+export const updateUserApi = (id: number, data: any) =>
+  api.patch(`/users/${id}/`, data);
+export const deleteUserApi = (id: number) => api.delete(`/users/${id}/`);
 
-export const updateUserApi = (userId: number, data: any) =>
-  api.patch(`/users/${userId}/`, data);
-
-export const deleteUserApi = (userId: number) =>
-  api.delete(`/users/${userId}/`);
-
-// Notifications
+// ── Notifications ─────────────────────────────────────────────
 export const getNotificationsApi = () => api.get("/notifications/");
 export const markNotificationReadApi = (id: number) =>
   api.post(`/notifications/${id}/read/`);
 
-// Settings
+// ── Settings ──────────────────────────────────────────────────
 export const getSettingsApi = () => api.get("/settings/");
 export const updateSettingsApi = (data: any) => api.patch("/settings/", data);
 
-// Reports
-// Reports
+// ── Reports ───────────────────────────────────────────────────
 export const downloadReportApi = async (
-  type: "course" | "student" | "summary",
-  id: number | null,
+  type: "offering" | "student",
+  id: number,
   format: "pdf" | "csv",
   reportType: "full" | "weekly" = "full",
 ) => {
-  const token = localStorage.getItem("access_token");
-  
-  const params = new URLSearchParams();
-  if (type === "course" && id !== null) params.append("course_id", id.toString());
-  if (type === "student" && id !== null) params.append("student_id", id.toString());
-  if (type === "summary") params.append("summary", "true");
-  
-  params.append("format", format);
-  params.append("type", reportType);
+  let token = localStorage.getItem("access_token");
+  const url =
+    type === "offering"
+      ? `${API_BASE_URL}/reports/offering/${id}/?format=${format}&type=${reportType}`
+      : `${API_BASE_URL}/reports/student/${id}/?format=${format}`;
 
-  const url = `${API_BASE_URL}/reports/download/?${params.toString()}`;
-
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
 
-  if (!response.ok) throw new Error("Download failed");
+  if (response.status === 401) {
+    const refresh = localStorage.getItem("refresh_token");
+    if (refresh) {
+      try {
+        const refreshRes = await fetch(`${API_BASE_URL}/auth/refresh/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh }),
+        });
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          localStorage.setItem("access_token", data.access);
+          token = data.access;
+          response = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        }
+      } catch {
+        localStorage.clear();
+        window.location.href = "/login";
+        return;
+      }
+    }
+  }
+
+  if (!response.ok) {
+    let errorMsg = `Server error: ${response.status}`;
+    try {
+      const errData = await response.json();
+      errorMsg = errData.error || errData.detail || errorMsg;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(errorMsg);
+  }
 
   const blob = await response.blob();
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
-  
-  // Extract filename from the Content-Disposition header if available
-  const contentDisposition = response.headers.get("Content-Disposition");
-  let filename = `report_${new Date().getTime()}.${format}`;
-  if (contentDisposition && contentDisposition.includes("filename=")) {
-    const filenameMatch = contentDisposition.match(/filename="?(.+?)"?$/);
-    if (filenameMatch && filenameMatch.length === 2) {
-      filename = filenameMatch[1];
-    }
-  } else {
-    filename = type === "course"
-      ? `course_${id}_${reportType}.${format}`
-      : type === "student"
-      ? `student_${id}.${format}`
-      : `summary_report.${format}`;
-  }
-
-  link.download = filename;
+  link.download =
+    type === "offering"
+      ? `offering_${id}_${reportType}.${format}`
+      : `student_${id}.${format}`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(objectUrl);
 };
-
-// Portals
-export const getStudentDashboardApi = () => api.get("/student/dashboard/");
-export const getParentDashboardApi = () => api.get("/parent/dashboard/");
 
 export default api;

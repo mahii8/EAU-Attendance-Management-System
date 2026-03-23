@@ -13,8 +13,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getProgrammesApi,
   getSectionsApi,
-  getCoursesApi,
-  getCourseSummaryApi,
+  getSemestersApi,
+  getOfferingsApi,
   getAttendanceApi,
 } from "@/api/axios";
 import { format, startOfWeek, endOfWeek } from "date-fns";
@@ -29,16 +29,23 @@ interface Section {
   name: string;
   year: number;
 }
+interface Semester {
+  id: number;
+  label: string;
+  is_current: boolean;
+}
 
 const AttendanceChart = () => {
   const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [programmes, setProgrammes] = useState<Programme[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [semesters, setSemesters] = useState<Semester[]>([]);
   const [filterProgramme, setFilterProgramme] = useState("");
   const [filterSection, setFilterSection] = useState("");
+  const [filterSemester, setFilterSemester] = useState("");
   const [years, setYears] = useState<number[]>([]);
-  const [filterYear, setFilterYear] = useState("2");
+  const [filterYear, setFilterYear] = useState("1");
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   // Date range — default to current week
@@ -49,57 +56,75 @@ const AttendanceChart = () => {
     format(endOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"),
   );
 
+  // Load programmes and semesters on mount
   useEffect(() => {
-    getProgrammesApi().then((res) => {
-      setProgrammes(res.data);
-      if (res.data.length > 0) {
-        setFilterProgramme(String(res.data[0].id));
-      }
-    });
+    Promise.all([getProgrammesApi(), getSemestersApi()]).then(
+      ([progRes, semRes]) => {
+        setProgrammes(progRes.data);
+        if (progRes.data.length > 0) {
+          setFilterProgramme(String(progRes.data[0].id));
+        }
+        const sems = semRes.data || [];
+        setSemesters(sems);
+        const current = sems.find((s: Semester) => s.is_current);
+        if (current) setFilterSemester(String(current.id));
+      },
+    );
   }, []);
 
+  // When programme or semester changes — update year list and load sections
   useEffect(() => {
     if (!filterProgramme) return;
     const prog = programmes.find((p) => p.id === parseInt(filterProgramme));
     if (prog)
       setYears(Array.from({ length: prog.duration_years }, (_, i) => i + 1));
+
+    if (!filterSemester) return;
     getSectionsApi({
       programme: parseInt(filterProgramme),
       year: parseInt(filterYear),
-      semester: 2,
-      academic_year: "2024/25",
+      semester: parseInt(filterSemester),
     }).then((res) => {
       setSections(res.data);
       setFilterSection("");
     });
-  }, [filterProgramme, filterYear]);
+  }, [filterProgramme, filterYear, filterSemester]);
 
+  // Fetch chart data when filters change
   useEffect(() => {
-    if (!filterProgramme) return;
+    if (!filterProgramme || !filterSemester) return;
     fetchChartData();
-  }, [filterProgramme, filterYear, filterSection, startDate, endDate]);
+  }, [
+    filterProgramme,
+    filterYear,
+    filterSection,
+    filterSemester,
+    startDate,
+    endDate,
+  ]);
 
   const fetchChartData = async () => {
     setLoading(true);
     try {
-      const params: any = {
+      // Get offerings for the selected filters
+      const offeringParams: any = {
+        semester: filterSemester,
         programme: filterProgramme,
-        year: filterYear,
-        semester: 2,
       };
-      if (filterSection) params.section = filterSection;
+      if (filterSection) offeringParams.section = filterSection;
 
-      const coursesRes = await getCoursesApi(params);
-      const courses = coursesRes.data.slice(0, 8);
+      const offeringsRes = await getOfferingsApi(offeringParams);
+      const offerings = offeringsRes.data
+        .filter(
+          (o: any) => !filterYear || o.section_year === parseInt(filterYear),
+        )
+        .slice(0, 8);
 
       const data = await Promise.all(
-        courses.map(async (course: any) => {
-          // Get attendance records for this course in the date range
+        offerings.map(async (offering: any) => {
           const attendanceParams: any = {
-            course: course.id,
+            offering: offering.id,
           };
-          if (filterSection) attendanceParams.section = filterSection;
-
           const attendanceRes = await getAttendanceApi(attendanceParams);
           const records = attendanceRes.data.filter((r: any) => {
             const d = r.date;
@@ -110,28 +135,29 @@ const AttendanceChart = () => {
             (r: any) => r.status === "present",
           ).length;
           const late = records.filter((r: any) => r.status === "late").length;
-          const exempted = records.filter(
-            (r: any) => r.status === "exempted",
+          const excused = records.filter(
+            (r: any) => r.status === "excused",
           ).length;
-          const absent = records.filter(
-            (r: any) => r.status === "absent",
+          const unexcused = records.filter(
+            (r: any) => r.status === "unexcused",
           ).length;
 
           return {
             name:
-              course.name.length > 12
-                ? course.name.substring(0, 12) + "..."
-                : course.name,
-            fullName: course.name,
+              offering.course_name.length > 12
+                ? offering.course_name.substring(0, 12) + "..."
+                : offering.course_name,
+            fullName: offering.course_name,
             Present: present,
             Late: late,
-            Exempted: exempted,
-            Absent: absent,
+            Excused: excused,
+            Absent: unexcused,
           };
         }),
       );
+
       setChartData(
-        data.filter((d) => d.Present + d.Late + d.Exempted + d.Absent > 0),
+        data.filter((d) => d.Present + d.Late + d.Excused + d.Absent > 0),
       );
     } catch (e) {
       console.error(e);
@@ -221,6 +247,20 @@ const AttendanceChart = () => {
             </p>
           </div>
           <div className="flex gap-2 flex-wrap items-center">
+            {/* Semester filter */}
+            <select
+              value={filterSemester}
+              onChange={(e) => setFilterSemester(e.target.value)}
+              className="border border-input rounded-lg px-2 py-1 text-xs bg-background outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">All Semesters</option>
+              {semesters.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label} {s.is_current ? "✓" : ""}
+                </option>
+              ))}
+            </select>
+
             {/* Programme filter */}
             <select
               value={filterProgramme}
@@ -369,7 +409,7 @@ const AttendanceChart = () => {
                 fill="hsl(var(--secondary))"
                 radius={[4, 4, 0, 0]}
               />
-              <Bar dataKey="Exempted" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="Excused" fill="#94a3b8" radius={[4, 4, 0, 0]} />
               <Bar
                 dataKey="Absent"
                 fill="hsl(var(--destructive))"
