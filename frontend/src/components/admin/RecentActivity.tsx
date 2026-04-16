@@ -8,50 +8,82 @@ interface RecentActivityProps {
 
 const dotColors: Record<string, string> = {
   absence: "bg-destructive",
-  threshold: "bg-secondary",
+  threshold: "bg-amber-500",
   info: "bg-primary",
 };
 
-const fallbackActivities = [
-  { action: "Attendance logged", detail: "Database Systems — session recorded", type: "info", time: "2 min ago" },
-  { action: "Warning sent", detail: "Student approaching absence threshold", type: "threshold", time: "15 min ago" },
-  { action: "Report generated", detail: "Weekly attendance PDF exported", type: "info", time: "1 hr ago" },
-  { action: "Student enrolled", detail: "New student added to Section A", type: "info", time: "2 hrs ago" },
-  { action: "Course updated", detail: "Minimum hours threshold adjusted", type: "info", time: "3 hrs ago" },
-];
+const typeLabel: Record<string, string> = {
+  absence: "Absence recorded",
+  threshold: "Threshold warning",
+  info: "System notification",
+};
+
+const formatTime = (iso: string) => {
+  const date = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return "Yesterday";
+  return date.toLocaleDateString([], { day: "numeric", month: "short" });
+};
 
 const RecentActivity = ({ notifications }: RecentActivityProps) => {
-  const activities = notifications.length > 0
-    ? notifications.slice(0, 5).map((n) => ({
-        action: n.notification_type === "absence" ? "Absence recorded" : "Threshold warning",
-        detail: n.message,
-        type: n.notification_type,
-        time: new Date(n.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      }))
-    : fallbackActivities;
+  const activities = notifications.slice(0, 5);
 
   return (
     <Card className="shadow-card border-border/50 animate-fade-in">
       <CardHeader className="pb-3">
         <div className="flex items-center gap-2">
           <Clock className="w-4 h-4 text-muted-foreground" />
-          <CardTitle className="font-display text-base">Recent Activity</CardTitle>
+          <CardTitle className="font-display text-base">
+            Recent Activity
+          </CardTitle>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {activities.map((activity, i) => (
-          <div key={i} className="flex gap-3">
-            <div className="flex flex-col items-center">
-              <div className={`w-2 h-2 rounded-full mt-2 ${dotColors[activity.type] || "bg-primary"}`} />
-              {i < activities.length - 1 && <div className="w-px flex-1 bg-border mt-1" />}
-            </div>
-            <div className="pb-4">
-              <p className="text-sm font-medium">{activity.action}</p>
-              <p className="text-xs text-muted-foreground">{activity.detail}</p>
-              <p className="text-xs text-muted-foreground/60 mt-0.5">{activity.time}</p>
-            </div>
+      <CardContent>
+        {activities.length === 0 ? (
+          <div className="py-8 text-center">
+            <Clock className="w-8 h-8 text-muted-foreground/30 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No recent activity</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              Activity will appear here as attendance is recorded
+            </p>
           </div>
-        ))}
+        ) : (
+          <div className="space-y-0">
+            {activities.map((n, i) => (
+              <div key={n.id} className="flex gap-3">
+                <div className="flex flex-col items-center">
+                  <div
+                    className={`w-2 h-2 rounded-full mt-2 shrink-0 ${
+                      dotColors[n.notification_type] ?? "bg-primary"
+                    }`}
+                  />
+                  {i < activities.length - 1 && (
+                    <div className="w-px flex-1 bg-border mt-1" />
+                  )}
+                </div>
+                <div className="pb-4 min-w-0">
+                  <p className="text-sm font-medium">
+                    {typeLabel[n.notification_type] ?? "Notification"}
+                  </p>
+                  <p className="text-xs text-muted-foreground leading-snug mt-0.5 line-clamp-2">
+                    {n.message}
+                  </p>
+                  <p className="text-xs text-muted-foreground/50 mt-1">
+                    {formatTime(n.created_at)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

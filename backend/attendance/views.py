@@ -17,7 +17,7 @@ from django.http import HttpResponse
 from .models import (
     User, Programme, Course, AcademicYear, Semester,
     Section, Student, Enrollment, CourseOffering,
-    AttendanceRecord, Notification, SystemSettings
+    AttendanceRecord, Notification, SystemSettings, School
 )
 from .serializers import (
     UserSerializer, LoginSerializer, ProgrammeSerializer,
@@ -25,7 +25,7 @@ from .serializers import (
     SectionSerializer, StudentSerializer, EnrollmentSerializer,
     CourseOfferingSerializer, AttendanceRecordSerializer,
     AttendanceSubmitSerializer, NotificationSerializer,
-    SystemSettingsSerializer
+    SystemSettingsSerializer, SchoolSerializer
 )
 from .utils import send_absence_alert, send_threshold_warning
 from .reports import (
@@ -34,18 +34,59 @@ from .reports import (
 )
 
 
+# ─────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────
 def is_admin(user):
     return user.role == 'admin' or user.is_superuser
 
 
-def notify_admins(notification_type, message):
-    """Create a notification for all admin users."""
-    admins = User.objects.filter(Q(role='admin') | Q(is_superuser=True))
-    for admin in admins:
+def is_elevated(user):
+    return user.role in ('admin', 'dean', 'dept_head') or user.is_superuser
+
+
+def get_programme_ids(user):
+    """
+    Returns list of programme IDs accessible to the user.
+    Returns None for unrestricted (admin/superuser).
+    Returns [] if no scope assigned (teacher etc.).
+    """
+    if user.role == 'admin' or user.is_superuser:
+        return None
+    if user.role == 'dept_head' and user.managed_programme_id:
+        return [user.managed_programme_id]
+    if user.role == 'dean' and user.managed_school_id:
+        return list(
+            Programme.objects.filter(
+                school_id=user.managed_school_id, is_active=True
+            ).values_list('id', flat=True)
+        )
+    return []
+
+
+def apply_programme_scope(qs, user, programme_field='programme_id'):
+    """Filter queryset to programmes the user can access."""
+    ids = get_programme_ids(user)
+    if ids is None:
+        return qs
+    if not ids:
+        return qs.none()
+    return qs.filter(**{f'{programme_field}__in': ids})
+
+
+def notify_elevated(notification_type, message, programme=None):
+    """Notify all elevated users. Tags notification with programme for scoped filtering."""
+    recipients = User.objects.filter(
+        Q(role='admin') | Q(is_superuser=True) |
+        Q(role='dept_head', managed_programme=programme) |
+        Q(role='dean', managed_school__programmes=programme)
+    ).distinct()
+    for u in recipients:
         Notification.objects.create(
-            recipient=admin,
+            recipient=u,
             notification_type=notification_type,
-            message=message
+            message=message,
+            programme=programme,
         )
 
 
@@ -56,17 +97,29 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = LoginSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        username = serializer.validated_data['username']
-        password = serializer.validated_data['password']
-        user = authenticate(username=username, password=password)
+        identifier = request.data.get('username') or request.data.get('staff_id') or request.data.get('email')
+        password = request.data.get('password')
+
+        if not identifier or not password:
+            return Response({'error': 'Credentials required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate(username=identifier, password=password)
         if not user:
-            return Response(
-                {'error': 'Invalid credentials'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
+            try:
+                found = User.objects.get(staff_id=identifier)
+                user = authenticate(username=found.username, password=password)
+            except User.DoesNotExist:
+                pass
+        if not user:
+            try:
+                found = User.objects.get(email=identifier)
+                user = authenticate(username=found.username, password=password)
+            except User.DoesNotExist:
+                pass
+
+        if not user:
+            return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
         refresh = RefreshToken.for_user(user)
         refresh['user_id'] = int(user.id)
         return Response({
@@ -91,6 +144,7 @@ class ProgrammeListView(APIView):
 
     def get(self, request):
         programmes = Programme.objects.all()
+        programmes = apply_programme_scope(programmes, request.user, 'id')
         if request.query_params.get('active_only'):
             programmes = programmes.filter(is_active=True)
         return Response(ProgrammeSerializer(programmes, many=True).data)
@@ -138,13 +192,14 @@ class ProgrammeDetailView(APIView):
 
 
 # ─────────────────────────────────────────
-# COURSES (templates)
+# COURSES
 # ─────────────────────────────────────────
 class CourseListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         courses = Course.objects.select_related('programme').all()
+        courses = apply_programme_scope(courses, request.user, 'programme_id')
         if request.query_params.get('programme'):
             courses = courses.filter(programme_id=request.query_params['programme'])
         if request.query_params.get('year'):
@@ -325,9 +380,8 @@ class SectionListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        sections = Section.objects.select_related(
-            'programme', 'semester__academic_year'
-        ).all()
+        sections = Section.objects.select_related('programme', 'semester__academic_year').all()
+        sections = apply_programme_scope(sections, request.user, 'programme_id')
         if request.query_params.get('semester'):
             sections = sections.filter(semester_id=request.query_params['semester'])
         if request.query_params.get('programme'):
@@ -393,14 +447,14 @@ class StudentListView(APIView):
 
     def get(self, request):
         students = Student.objects.select_related('programme').all()
+        students = apply_programme_scope(students, request.user, 'programme_id')
         if request.query_params.get('programme'):
             students = students.filter(programme_id=request.query_params['programme'])
         if request.query_params.get('active_only'):
             students = students.filter(is_active=True)
         if request.query_params.get('semester'):
-            semester_id = request.query_params['semester']
             students = students.filter(
-                enrollments__section__semester_id=semester_id,
+                enrollments__section__semester_id=request.query_params['semester'],
                 enrollments__status='active'
             ).distinct()
         if request.query_params.get('section'):
@@ -411,31 +465,26 @@ class StudentListView(APIView):
         if request.query_params.get('search'):
             q = request.query_params['search']
             students = students.filter(
-                Q(first_name__icontains=q) |
-                Q(last_name__icontains=q) |
-                Q(student_id__icontains=q) |
-                Q(email__icontains=q)
+                Q(first_name__icontains=q) | Q(last_name__icontains=q) |
+                Q(student_id__icontains=q) | Q(email__icontains=q)
             )
         return Response(StudentSerializer(students, many=True).data)
 
     def post(self, request):
-        if not is_admin(request.user):
+        if not is_elevated(request.user):
             return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
         required = ['first_name', 'last_name', 'student_id', 'email']
         for f in required:
             if not request.data.get(f):
                 return Response({'error': f'{f} is required'}, status=status.HTTP_400_BAD_REQUEST)
-
         if Student.objects.filter(student_id=request.data['student_id']).exists():
             return Response({'error': 'Student ID already exists'}, status=status.HTTP_400_BAD_REQUEST)
-
         programme = None
         if request.data.get('programme_id'):
             try:
                 programme = Programme.objects.get(id=request.data['programme_id'])
             except Programme.DoesNotExist:
                 return Response({'error': 'Programme not found'}, status=status.HTTP_404_NOT_FOUND)
-
         student = Student.objects.create(
             first_name=request.data['first_name'],
             last_name=request.data['last_name'],
@@ -445,14 +494,12 @@ class StudentListView(APIView):
             parent_telegram=request.data.get('parent_telegram', ''),
             programme=programme,
         )
-
         if request.data.get('section_id'):
             try:
                 section = Section.objects.get(id=request.data['section_id'])
                 Enrollment.objects.create(student=student, section=section)
             except Section.DoesNotExist:
                 pass
-
         return Response(StudentSerializer(student).data, status=status.HTTP_201_CREATED)
 
 
@@ -488,29 +535,21 @@ class StudentBulkImportView(APIView):
     def post(self, request):
         if not is_admin(request.user):
             return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
-
         file = request.FILES.get('file')
         if not file:
             return Response({'error': 'CSV file is required'}, status=status.HTTP_400_BAD_REQUEST)
-
         decoded = file.read().decode('utf-8-sig')
         reader = csv.DictReader(io.StringIO(decoded))
-
         created, updated, errors = [], [], []
-
         for i, row in enumerate(reader, start=2):
             try:
                 student_id = row.get('student_id', '').strip()
                 if not student_id:
                     errors.append({'row': i, 'error': 'student_id is required'})
                     continue
-
                 programme = None
                 if row.get('programme_code', '').strip():
-                    programme = Programme.objects.filter(
-                        code__iexact=row['programme_code'].strip()
-                    ).first()
-
+                    programme = Programme.objects.filter(code__iexact=row['programme_code'].strip()).first()
                 student, was_created = Student.objects.update_or_create(
                     student_id=student_id,
                     defaults={
@@ -523,29 +562,20 @@ class StudentBulkImportView(APIView):
                         'is_active': True,
                     }
                 )
-
                 if row.get('section_id', '').strip():
                     try:
                         section = Section.objects.get(id=int(row['section_id'].strip()))
-                        Enrollment.objects.get_or_create(
-                            student=student, section=section,
-                            defaults={'status': 'active'}
-                        )
+                        Enrollment.objects.get_or_create(student=student, section=section, defaults={'status': 'active'})
                     except (Section.DoesNotExist, ValueError):
                         pass
-
                 if was_created:
                     created.append(student_id)
                 else:
                     updated.append(student_id)
-
             except Exception as e:
                 errors.append({'row': i, 'error': str(e)})
-
         return Response({
-            'created': len(created),
-            'updated': len(updated),
-            'errors': errors,
+            'created': len(created), 'updated': len(updated), 'errors': errors,
             'message': f'{len(created)} students created, {len(updated)} updated, {len(errors)} errors'
         }, status=status.HTTP_200_OK)
 
@@ -560,6 +590,7 @@ class EnrollmentListView(APIView):
         enrollments = Enrollment.objects.select_related(
             'student', 'section__programme', 'section__semester__academic_year'
         ).all()
+        enrollments = apply_programme_scope(enrollments, request.user, 'section__programme_id')
         if request.query_params.get('section'):
             enrollments = enrollments.filter(section_id=request.query_params['section'])
         if request.query_params.get('student'):
@@ -579,13 +610,10 @@ class EnrollmentListView(APIView):
         except (Student.DoesNotExist, Section.DoesNotExist, KeyError) as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         enrollment, created = Enrollment.objects.get_or_create(
-            student=student, section=section,
-            defaults={'status': 'active'}
+            student=student, section=section, defaults={'status': 'active'}
         )
-        return Response(
-            EnrollmentSerializer(enrollment).data,
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
-        )
+        return Response(EnrollmentSerializer(enrollment).data,
+                        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 class EnrollmentDetailView(APIView):
@@ -633,13 +661,10 @@ class BulkEnrollView(APIView):
             try:
                 student = Student.objects.get(id=sid)
                 _, created = Enrollment.objects.get_or_create(
-                    student=student, section=section,
-                    defaults={'status': 'active'}
+                    student=student, section=section, defaults={'status': 'active'}
                 )
-                if created:
-                    enrolled += 1
-                else:
-                    skipped += 1
+                enrolled += 1 if created else 0
+                skipped += 0 if created else 1
             except Student.DoesNotExist:
                 skipped += 1
         return Response({'enrolled': enrolled, 'skipped': skipped})
@@ -658,8 +683,10 @@ class CourseOfferingListView(APIView):
             'section__semester__academic_year', 'teacher'
         ).all()
 
-        if not is_admin(user):
+        if user.role == 'teacher':
             offerings = offerings.filter(teacher=user)
+        else:
+            offerings = apply_programme_scope(offerings, user, 'section__programme_id')
 
         if request.query_params.get('semester'):
             offerings = offerings.filter(section__semester_id=request.query_params['semester'])
@@ -669,7 +696,6 @@ class CourseOfferingListView(APIView):
             offerings = offerings.filter(section__programme_id=request.query_params['programme'])
         if request.query_params.get('teacher'):
             offerings = offerings.filter(teacher_id=request.query_params['teacher'])
-
         return Response(CourseOfferingSerializer(offerings, many=True).data)
 
     def post(self, request):
@@ -684,26 +710,20 @@ class CourseOfferingListView(APIView):
             section = Section.objects.get(id=request.data['section_id'])
         except (Course.DoesNotExist, Section.DoesNotExist) as e:
             return Response({'error': str(e)}, status=status.HTTP_404_NOT_FOUND)
-
         teacher = None
         if request.data.get('teacher_id'):
             try:
                 teacher = User.objects.get(id=request.data['teacher_id'])
             except User.DoesNotExist:
                 return Response({'error': 'Teacher not found'}, status=status.HTTP_404_NOT_FOUND)
-
         offering, created = CourseOffering.objects.get_or_create(
-            course=course, section=section,
-            defaults={'teacher': teacher}
+            course=course, section=section, defaults={'teacher': teacher}
         )
         if not created and teacher:
             offering.teacher = teacher
             offering.save()
-
-        return Response(
-            CourseOfferingSerializer(offering).data,
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
-        )
+        return Response(CourseOfferingSerializer(offering).data,
+                        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 class CourseOfferingDetailView(APIView):
@@ -743,9 +763,7 @@ class CourseOfferingStudentsView(APIView):
             offering = CourseOffering.objects.get(id=offering_id)
         except CourseOffering.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-        enrollments = Enrollment.objects.filter(
-            section=offering.section, status='active'
-        ).select_related('student')
+        enrollments = Enrollment.objects.filter(section=offering.section, status='active').select_related('student')
         students = [e.student for e in enrollments]
         return Response({
             'offering': CourseOfferingSerializer(offering).data,
@@ -761,37 +779,24 @@ class CourseOfferingSummaryView(APIView):
             offering = CourseOffering.objects.get(id=offering_id)
         except CourseOffering.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-
         settings = SystemSettings.get()
         at_risk_threshold = settings.at_risk_threshold
         warning_threshold = settings.warning_threshold
-
-        enrollments = Enrollment.objects.filter(
-            section=offering.section, status='active'
-        ).select_related('student')
-        students = [e.student for e in enrollments]
+        enrollments = Enrollment.objects.filter(section=offering.section, status='active').select_related('student')
         summary = []
-
-        for student in students:
-            records = AttendanceRecord.objects.filter(
-                student=student, course_offering=offering
-            )
-            attended = records.filter(
-                status__in=['present', 'late']
-            ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-            missed = records.filter(
-                status__in=['unexcused', 'excused']
-            ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        for enrollment in enrollments:
+            student = enrollment.student
+            records = AttendanceRecord.objects.filter(student=student, course_offering=offering)
+            attended = records.filter(status__in=['present', 'late']).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+            missed = records.filter(status__in=['absent', 'excused']).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
             total = attended + missed
             percentage = round(float(attended / total * 100) if total > 0 else 100.0, 1)
-
             if percentage < float(at_risk_threshold):
                 stu_status = 'at_risk'
             elif percentage < float(warning_threshold):
                 stu_status = 'warning'
             else:
                 stu_status = 'safe'
-
             summary.append({
                 'student': StudentSerializer(student).data,
                 'attended_hours': float(attended),
@@ -801,11 +806,7 @@ class CourseOfferingSummaryView(APIView):
                 'minimum_required_hours': float(offering.course.minimum_required_hours),
                 'status': stu_status,
             })
-
-        return Response({
-            'offering': CourseOfferingSerializer(offering).data,
-            'summary': summary
-        })
+        return Response({'offering': CourseOfferingSerializer(offering).data, 'summary': summary})
 
 
 # ─────────────────────────────────────────
@@ -818,7 +819,7 @@ class AttendanceListView(APIView):
         records = AttendanceRecord.objects.select_related(
             'student', 'course_offering__course', 'course_offering__section'
         ).order_by('-date')
-
+        records = apply_programme_scope(records, request.user, 'course_offering__section__programme_id')
         if request.query_params.get('offering'):
             records = records.filter(course_offering_id=request.query_params['offering'])
         if request.query_params.get('section'):
@@ -827,6 +828,10 @@ class AttendanceListView(APIView):
             records = records.filter(course_offering__section__semester_id=request.query_params['semester'])
         if request.query_params.get('programme'):
             records = records.filter(course_offering__section__programme_id=request.query_params['programme'])
+        if request.query_params.get('student'):
+            records = records.filter(student_id=request.query_params['student'])
+        if request.query_params.get('student_staff_id'):
+            records = records.filter(student__student_id=request.query_params['student_staff_id'])
         if request.query_params.get('date'):
             try:
                 records = records.filter(date=datetime.date.fromisoformat(request.query_params['date']))
@@ -835,20 +840,15 @@ class AttendanceListView(APIView):
         if request.query_params.get('search'):
             q = request.query_params['search']
             records = records.filter(
-                Q(student__first_name__icontains=q) |
-                Q(student__last_name__icontains=q) |
+                Q(student__first_name__icontains=q) | Q(student__last_name__icontains=q) |
                 Q(student__student_id__icontains=q)
             )
-
         data = [{
-            'id': r.id,
-            'date': r.date,
-            'student_name': r.student.full_name,
-            'student_id': r.student.student_id,
+            'id': r.id, 'date': r.date,
+            'student_name': r.student.full_name, 'student_id': r.student.student_id,
             'course_name': r.course_offering.course.name,
             'section_name': r.course_offering.section.name,
-            'status': r.status,
-            'hours_attended': r.hours_attended,
+            'status': r.status, 'hours_attended': r.hours_attended,
         } for r in records]
         return Response(data)
 
@@ -878,12 +878,9 @@ class AttendanceSubmitView(APIView):
                 student = Student.objects.get(id=student_id)
             except Student.DoesNotExist:
                 continue
-
-            att, _ = AttendanceRecord.objects.update_or_create(
-                student=student,
-                course_offering=offering,
-                date=data['date'],
-                session_type=data['session_type'],
+            AttendanceRecord.objects.update_or_create(
+                student=student, course_offering=offering,
+                date=data['date'], session_type=data['session_type'],
                 defaults={
                     'status': status_val,
                     'hours_attended': data['session_hours'] if status_val in ['present', 'late'] else Decimal('0'),
@@ -891,121 +888,74 @@ class AttendanceSubmitView(APIView):
                 }
             )
             count += 1
-
-            if status_val in ['unexcused', 'excused']:
+            if status_val == 'absent':
                 absent_students.append(student.full_name)
                 self._handle_absence(student, offering, data['date'], teacher)
 
-        # ── Notify: attendance logged ──────────────────────────────────────
         section_label = f"Sec {offering.section.name} Y{offering.section.year}"
         absent_count = len(absent_students)
-
-        # Notify the teacher themselves
         teacher_msg = (
-            f"You logged attendance for {offering.course.name} ({section_label}) "
-            f"on {data['date']}. {count} students recorded"
-            + (f", {absent_count} absent." if absent_count else ".")
+            f"You logged attendance for {offering.course.name} ({section_label}) on {data['date']}. "
+            f"{count} students recorded" + (f", {absent_count} absent." if absent_count else ".")
         )
-        Notification.objects.create(
-            recipient=teacher,
-            notification_type='info',
-            message=teacher_msg
-        )
-
-        # Notify all admins
+        Notification.objects.create(recipient=teacher, notification_type='info', message=teacher_msg)
         admin_msg = (
-            f"{teacher_name} logged attendance for {offering.course.name} "
-            f"({section_label}) on {data['date']}. "
-            f"{count} students recorded"
-            + (f", {absent_count} absent: {', '.join(absent_students[:5])}"
-               + (" and more." if absent_count > 5 else ".")
-               if absent_count else ".")
+            f"{teacher_name} logged attendance for {offering.course.name} ({section_label}) on {data['date']}. "
+            f"{count} students recorded" + (
+                f", {absent_count} absent: {', '.join(absent_students[:5])}" +
+                (" and more." if absent_count > 5 else ".") if absent_count else "."
+            )
         )
-        notify_admins('attendance_logged', admin_msg)
-
+        notify_elevated('info', admin_msg, programme=offering.course.programme)
         return Response({
             'message': f'Attendance recorded for {count} students',
-            'date': str(data['date']),
-            'course': offering.course.name,
+            'date': str(data['date']), 'course': offering.course.name,
         }, status=status.HTTP_201_CREATED)
 
     def _handle_absence(self, student, offering, att_date, teacher):
-        """Per-student absence: notify teacher + admins, send email."""
         teacher_name = f"{teacher.first_name} {teacher.last_name}".strip() or teacher.username
-
-        # Notify the teacher
         Notification.objects.create(
-            recipient=teacher,
-            notification_type='absence',
+            recipient=teacher, notification_type='absence',
             message=f"{student.full_name} was absent in {offering.course.name} on {att_date}."
         )
-
-        # Notify admins
-        notify_admins(
+        notify_elevated(
             'absence',
             f"{student.full_name} (ID: {student.student_id}) was absent in "
-            f"{offering.course.name} on {att_date}. Logged by {teacher_name}."
+            f"{offering.course.name} on {att_date}. Logged by {teacher_name}.",
+            programme=offering.course.programme,
         )
-
-        # Send email to student and parent
         try:
             send_absence_alert(student, offering.course, att_date)
         except Exception:
             pass
-
-        # Check attendance threshold
         self._check_threshold(student, offering, teacher)
 
     def _check_threshold(self, student, offering, teacher):
-        """Check if student attendance % has dropped below thresholds."""
         settings_obj = SystemSettings.get()
         at_risk_threshold = float(settings_obj.at_risk_threshold)
         warning_threshold = float(settings_obj.warning_threshold)
         teacher_name = f"{teacher.first_name} {teacher.last_name}".strip() or teacher.username
-
-        records = AttendanceRecord.objects.filter(
-            student=student, course_offering=offering
-        )
-        attended = records.filter(
-            status__in=['present', 'late']
-        ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-        missed = records.filter(
-            status__in=['unexcused', 'excused']
-        ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        records = AttendanceRecord.objects.filter(student=student, course_offering=offering)
+        attended = records.filter(status__in=['present', 'late']).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        missed = records.filter(status__in=['absent', 'excused']).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
         total = attended + missed
-
         if total == 0:
             return
-
         percentage = round(float(attended / total * 100), 1)
         minimum = offering.course.minimum_required_hours
-
         if percentage < at_risk_threshold:
-            level = "AT RISK"
-            notif_type = 'at_risk'
+            level, notif_type = "AT RISK", 'at_risk'
         elif percentage < warning_threshold:
-            level = "WARNING"
-            notif_type = 'threshold'
+            level, notif_type = "WARNING", 'threshold'
         else:
-            return  # Still safe, no notification needed
-
+            return
         message = (
             f"{level}: {student.full_name} (ID: {student.student_id}) attendance in "
-            f"{offering.course.name} is now {percentage}% "
-            f"({float(attended)} hrs attended). Minimum required: {float(minimum)} hrs."
+            f"{offering.course.name} is now {percentage}% ({float(attended)} hrs attended). "
+            f"Minimum required: {float(minimum)} hrs."
         )
-
-        # Notify teacher
-        Notification.objects.create(
-            recipient=teacher,
-            notification_type=notif_type,
-            message=message
-        )
-
-        # Notify admins
-        notify_admins(notif_type, f"{message} Logged by {teacher_name}.")
-
-        # Send email warning
+        Notification.objects.create(recipient=teacher, notification_type=notif_type, message=message)
+        notify_elevated(notif_type, f"{message} Logged by {teacher_name}.", programme=offering.course.programme)
         try:
             send_threshold_warning(student, offering.course, attended, minimum)
         except Exception:
@@ -1013,7 +963,7 @@ class AttendanceSubmitView(APIView):
 
 
 # ─────────────────────────────────────────
-# AT-RISK VIEW
+# AT-RISK
 # ─────────────────────────────────────────
 class AtRiskView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1021,65 +971,47 @@ class AtRiskView(APIView):
     def get(self, request):
         settings = SystemSettings.get()
         at_risk_threshold = float(settings.at_risk_threshold)
-
         semester_id = request.query_params.get('semester')
         programme_id = request.query_params.get('programme')
-
-        offerings = CourseOffering.objects.select_related(
-            'course', 'section__semester', 'section__programme'
-        ).all()
+        offerings = CourseOffering.objects.select_related('course', 'section__semester', 'section__programme').all()
+        offerings = apply_programme_scope(offerings, request.user, 'section__programme_id')
         if semester_id:
             offerings = offerings.filter(section__semester_id=semester_id)
         if programme_id:
             offerings = offerings.filter(section__programme_id=programme_id)
-
         at_risk = []
         for offering in offerings:
-            enrollments = Enrollment.objects.filter(
-                section=offering.section, status='active'
-            ).select_related('student')
+            enrollments = Enrollment.objects.filter(section=offering.section, status='active').select_related('student')
             for e in enrollments:
                 student = e.student
-                records = AttendanceRecord.objects.filter(
-                    student=student, course_offering=offering
-                )
-                attended = records.filter(
-                    status__in=['present', 'late']
-                ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-                missed = records.filter(
-                    status__in=['unexcused', 'excused']
-                ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+                records = AttendanceRecord.objects.filter(student=student, course_offering=offering)
+                attended = records.filter(status__in=['present', 'late']).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+                missed = records.filter(status__in=['absent', 'excused']).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
                 total = attended + missed
                 if total == 0:
                     continue
                 percentage = round(float(attended / total * 100), 1)
                 if percentage < at_risk_threshold:
                     at_risk.append({
-                        'student_id': student.student_id,
-                        'student_name': student.full_name,
-                        'course_name': offering.course.name,
-                        'section': offering.section.name,
+                        'student_id': student.student_id, 'student_name': student.full_name,
+                        'course_name': offering.course.name, 'section': offering.section.name,
                         'programme': offering.section.programme.name,
-                        'attended_hours': float(attended),
-                        'missed_hours': float(missed),
+                        'attended_hours': float(attended), 'missed_hours': float(missed),
                         'attendance_percentage': percentage,
                         'minimum_required': float(offering.course.minimum_required_hours),
                     })
-
         return Response({'count': len(at_risk), 'students': at_risk})
 
 
 # ─────────────────────────────────────────
-# STATS OVERVIEW
+# STATS
 # ─────────────────────────────────────────
 class StatsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        user = request.user
         semester_id = request.query_params.get('semester')
-        settings = SystemSettings.get()
-        at_risk_threshold = float(settings.at_risk_threshold)
-
         current_semester = None
         if semester_id:
             try:
@@ -1089,28 +1021,37 @@ class StatsView(APIView):
         else:
             current_semester = Semester.objects.filter(is_current=True).first()
 
-        total_students = Student.objects.filter(is_active=True).count()
-        total_courses = Course.objects.filter(is_active=True).count()
-        total_programmes = Programme.objects.filter(is_active=True).count()
+        programme_ids = get_programme_ids(user)
 
+        def scope(qs, field):
+            if programme_ids is None:
+                return qs
+            if not programme_ids:
+                return qs.none()
+            return qs.filter(**{f'{field}__in': programme_ids})
+
+        total_students   = scope(Student.objects.filter(is_active=True), 'programme_id').count()
+        total_courses    = scope(Course.objects.filter(is_active=True), 'programme_id').count()
+        total_programmes = scope(Programme.objects.filter(is_active=True), 'id').count()
         active_enrollments = 0
-        status_counts = {'present': 0, 'late': 0, 'excused': 0, 'unexcused': 0}
+        status_counts = {'present': 0, 'late': 0, 'excused': 0, 'absent': 0}
 
         if current_semester:
-            active_enrollments = Enrollment.objects.filter(
-                section__semester=current_semester, status='active'
-            ).count()
-            records = AttendanceRecord.objects.filter(
-                course_offering__section__semester=current_semester
+            enroll_qs = scope(
+                Enrollment.objects.filter(section__semester=current_semester, status='active'),
+                'section__programme_id'
+            )
+            active_enrollments = enroll_qs.count()
+            records = scope(
+                AttendanceRecord.objects.filter(course_offering__section__semester=current_semester),
+                'course_offering__section__programme_id'
             )
             for s in status_counts:
                 status_counts[s] = records.filter(status=s).count()
 
         return Response({
-            'total_students': total_students,
-            'total_courses': total_courses,
-            'total_programmes': total_programmes,
-            'active_enrollments': active_enrollments,
+            'total_students': total_students, 'total_courses': total_courses,
+            'total_programmes': total_programmes, 'active_enrollments': active_enrollments,
             'current_semester': SemesterSerializer(current_semester).data if current_semester else None,
             'status_distribution': status_counts,
         })
@@ -1131,20 +1072,35 @@ class UserListView(APIView):
     def post(self, request):
         if not is_admin(request.user):
             return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
-        required = ['username', 'first_name', 'last_name', 'email', 'role', 'password']
+        required = ['email', 'role', 'password']
         for f in required:
             if not request.data.get(f):
                 return Response({'error': f'{f} is required'}, status=status.HTTP_400_BAD_REQUEST)
-        if User.objects.filter(username=request.data['username']).exists():
+        username = request.data.get('username') or request.data.get('staff_id') or request.data['email']
+        if User.objects.filter(username=username).exists():
             return Response({'error': 'Username already exists'}, status=status.HTTP_400_BAD_REQUEST)
+        managed_programme = None
+        managed_school = None
+        if request.data.get('managed_programme_id'):
+            try:
+                managed_programme = Programme.objects.get(id=request.data['managed_programme_id'])
+            except Programme.DoesNotExist:
+                return Response({'error': 'Programme not found'}, status=status.HTTP_404_NOT_FOUND)
+        if request.data.get('managed_school_id'):
+            try:
+                managed_school = School.objects.get(id=request.data['managed_school_id'])
+            except School.DoesNotExist:
+                return Response({'error': 'School not found'}, status=status.HTTP_404_NOT_FOUND)
         user = User.objects.create(
-            username=request.data['username'],
+            username=username,
             staff_id=request.data.get('staff_id', ''),
-            first_name=request.data['first_name'],
-            last_name=request.data['last_name'],
+            first_name=request.data.get('first_name', ''),
+            last_name=request.data.get('last_name', ''),
             email=request.data['email'],
             role=request.data['role'],
             password=make_password(request.data['password']),
+            managed_programme=managed_programme,
+            managed_school=managed_school,
         )
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
@@ -1162,6 +1118,12 @@ class UserDetailView(APIView):
                 setattr(user, field, request.data[field])
         if request.data.get('password'):
             user.password = make_password(request.data['password'])
+        if 'managed_programme_id' in request.data:
+            pid = request.data['managed_programme_id']
+            user.managed_programme = Programme.objects.filter(id=pid).first() if pid else None
+        if 'managed_school_id' in request.data:
+            sid = request.data['managed_school_id']
+            user.managed_school = School.objects.filter(id=sid).first() if sid else None
         user.save()
         return Response(UserSerializer(user).data)
 
@@ -1185,19 +1147,30 @@ class NotificationListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        notifications = Notification.objects.filter(recipient=request.user, is_read=False)
-        return Response({
-            'count': notifications.count(),
-            'notifications': NotificationSerializer(notifications, many=True).data
-        })
+        user = request.user
+        programme_ids = get_programme_ids(user)
+        if programme_ids is None:
+            notifications = Notification.objects.filter(
+                Q(recipient=user) | Q(recipient__isnull=True), is_read=False
+            ).order_by('-created_at')
+        else:
+            notifications = Notification.objects.filter(
+                Q(recipient=user) | Q(programme_id__in=programme_ids), is_read=False
+            ).order_by('-created_at')
+        return Response({'count': notifications.count(), 'notifications': NotificationSerializer(notifications, many=True).data})
 
 
 class NotificationMarkReadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, notification_id):
+        user = request.user
+        programme_ids = get_programme_ids(user)
         try:
-            n = Notification.objects.get(id=notification_id, recipient=request.user)
+            if programme_ids is None:
+                n = Notification.objects.get(Q(recipient=user) | Q(recipient__isnull=True), id=notification_id)
+            else:
+                n = Notification.objects.get(Q(recipient=user) | Q(programme_id__in=programme_ids), id=notification_id)
             n.is_read = True
             n.save()
             return Response({'message': 'Marked as read'})
@@ -1236,28 +1209,29 @@ class CourseOfferingReportView(APIView):
             offering = CourseOffering.objects.get(id=offering_id)
         except CourseOffering.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-
         report_format = request.query_params.get('format', 'pdf')
         report_type = request.query_params.get('type', 'full')
-
-        if report_type == 'weekly':
-            end_date = date.today()
-            start_date = end_date - timedelta(days=7)
-            summary = get_course_offering_summary(offering, start_date, end_date)
-            title = "Weekly Attendance Report"
-            filename = f"{offering.course.name}_weekly_{end_date}"
-        else:
-            summary = get_course_offering_summary(offering)
-            title = "Full Attendance Report"
-            filename = f"{offering.course.name}_full_report"
-
-        if report_format == 'csv':
-            return generate_course_csv(offering.course, summary, f"{filename}.csv")
-
-        buffer = generate_course_pdf(offering.course, summary, title)
-        response = HttpResponse(buffer, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="{filename}.pdf"'
-        return response
+        try:
+            if report_type == 'weekly':
+                end_date = date.today()
+                start_date = end_date - timedelta(days=7)
+                summary = get_course_offering_summary(offering, start_date, end_date)
+                title = "Weekly Attendance Report"
+                filename = f"{offering.course.name}_weekly_{end_date}"
+            else:
+                summary = get_course_offering_summary(offering)
+                title = "Full Attendance Report"
+                filename = f"{offering.course.name}_full_report"
+            if report_format == 'csv':
+                return generate_course_csv(offering.course, summary, f"{filename}.csv")
+            buffer = generate_course_pdf(offering.course, summary, title)
+            response = HttpResponse(buffer, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="{filename}.pdf"'
+            return response
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': f'Report generation failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class StudentReportView(APIView):
@@ -1268,40 +1242,84 @@ class StudentReportView(APIView):
             student = Student.objects.get(id=student_id)
         except Student.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-
         report_format = request.query_params.get('format', 'pdf')
         semester_id = request.query_params.get('semester')
+        try:
+            records_qs = AttendanceRecord.objects.filter(student=student)
+            if semester_id:
+                records_qs = records_qs.filter(course_offering__section__semester_id=semester_id)
+            offering_ids = records_qs.values_list('course_offering_id', flat=True).distinct()
+            course_summaries = []
+            for oid in offering_ids:
+                offering = CourseOffering.objects.get(id=oid)
+                attended = records_qs.filter(course_offering=offering, status__in=['present', 'late']).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+                missed = records_qs.filter(course_offering=offering, status__in=['absent', 'excused']).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+                total = offering.course.total_credit_hours
+                percentage = round(float(attended) / float(total) * 100 if total > 0 else 0, 1)
+                course_summaries.append({
+                    'course_name': offering.course.name,
+                    'attended_hours': float(attended), 'missed_hours': float(missed),
+                    'total_hours': float(total), 'percentage': percentage,
+                    'minimum_required': float(offering.course.minimum_required_hours),
+                    'status': 'Safe' if percentage >= 90 else ('Warning' if percentage >= 85 else 'At Risk'),
+                })
+            if report_format == 'csv':
+                return generate_student_csv(student, course_summaries)
+            buffer = generate_student_pdf(student, course_summaries)
+            response = HttpResponse(buffer, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="student_{student.student_id}_report.pdf"'
+            return response
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': f'Report generation failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        records_qs = AttendanceRecord.objects.filter(student=student)
-        if semester_id:
-            records_qs = records_qs.filter(course_offering__section__semester_id=semester_id)
 
-        offering_ids = records_qs.values_list('course_offering_id', flat=True).distinct()
-        course_summaries = []
+# ─────────────────────────────────────────
+# SCHOOLS
+# ─────────────────────────────────────────
+class SchoolListView(APIView):
+    permission_classes = [IsAuthenticated]
 
-        for oid in offering_ids:
-            offering = CourseOffering.objects.get(id=oid)
-            attended = records_qs.filter(
-                course_offering=offering, status__in=['present', 'late']
-            ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-            missed = records_qs.filter(
-                course_offering=offering, status__in=['unexcused', 'excused']
-            ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-            total = offering.course.total_credit_hours
-            percentage = round(float(attended) / float(total) * 100 if total > 0 else 0, 1)
-            course_summaries.append({
-                'course_name': offering.course.name,
-                'attended_hours': float(attended),
-                'missed_hours': float(missed),
-                'total_hours': float(total),
-                'percentage': percentage,
-                'minimum_required': float(offering.course.minimum_required_hours),
-                'status': 'Safe' if percentage >= 90 else ('Warning' if percentage >= 85 else 'At Risk'),
-            })
+    def get(self, request):
+        schools = School.objects.all()
+        if request.query_params.get('active_only'):
+            schools = schools.filter(is_active=True)
+        return Response(SchoolSerializer(schools, many=True).data)
 
-        if report_format == 'csv':
-            return generate_student_csv(student, course_summaries)
-        buffer = generate_student_pdf(student, course_summaries)
-        response = HttpResponse(buffer, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="student_{student.student_id}_report.pdf"'
-        return response
+    def post(self, request):
+        if not is_admin(request.user):
+            return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+        name = request.data.get('name')
+        if not name:
+            return Response({'error': 'name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        school = School.objects.create(name=name, code=request.data.get('code', ''))
+        return Response(SchoolSerializer(school).data, status=status.HTTP_201_CREATED)
+
+
+class SchoolDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, school_id):
+        if not is_admin(request.user):
+            return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            school = School.objects.get(id=school_id)
+        except School.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        for field in ['name', 'code', 'is_active']:
+            if field in request.data:
+                setattr(school, field, request.data[field])
+        school.save()
+        return Response(SchoolSerializer(school).data)
+
+    def delete(self, request, school_id):
+        if not is_admin(request.user):
+            return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            school = School.objects.get(id=school_id)
+            school.is_active = False
+            school.save()
+            return Response({'message': 'School deactivated'})
+        except School.DoesNotExist:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)

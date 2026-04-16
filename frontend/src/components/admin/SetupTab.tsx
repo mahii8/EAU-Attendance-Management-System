@@ -24,12 +24,15 @@ import {
   getAcademicYearsApi,
   createAcademicYearApi,
   updateAcademicYearApi,
+  deleteAcademicYearApi,
   getSemestersApi,
   createSemesterApi,
   updateSemesterApi,
+  deleteSemesterApi,
   getProgrammesApi,
   createProgrammeApi,
   updateProgrammeApi,
+  deleteProgrammeApi,
   getSectionsApi,
   createSectionApi,
   deleteSectionApi,
@@ -39,6 +42,11 @@ import {
   deleteOfferingApi,
   getCoursesApi,
   getUsersApi,
+  getStudentsApi,
+  getEnrollmentsApi,
+  createEnrollmentApi,
+  deleteEnrollmentApi,
+  bulkEnrollApi,
 } from "@/api/axios";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -95,6 +103,20 @@ interface Course {
   name: string;
   programme: number;
   year: number;
+}
+interface Student {
+  id: number;
+  full_name: string;
+  student_id: string;
+  programme_name: string;
+}
+interface Enrollment {
+  id: number;
+  student: number;
+  student_name: string;
+  student_id_number: string;
+  section: number;
+  status: string;
 }
 interface User {
   id: number;
@@ -264,6 +286,22 @@ const AcademicYearsPanel = ({
     setOpen(true);
   };
 
+  const handleDelete = async (id: number) => {
+    if (
+      !confirm(
+        "Delete this academic year? All semesters and sections inside it will also be deleted.",
+      )
+    )
+      return;
+    try {
+      await deleteAcademicYearApi(id);
+      setYears((prev: AcademicYear[]) => prev.filter((y) => y.id !== id));
+      toast.success("Academic year deleted.");
+    } catch {
+      toast.error("Failed to delete academic year");
+    }
+  };
+
   const handleSave = async () => {
     if (!form.name || !form.start_date || !form.end_date) {
       toast.error("All fields are required");
@@ -365,12 +403,20 @@ const AcademicYearsPanel = ({
                     )}
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button
-                      onClick={() => openEdit(y)}
-                      className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => openEdit(y)}
+                        className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(y.id)}
+                        className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -500,6 +546,22 @@ const SemestersPanel = ({
     setOpen(true);
   };
 
+  const handleDelete = async (id: number) => {
+    if (
+      !confirm(
+        "Delete this semester? All sections inside it will also be deleted.",
+      )
+    )
+      return;
+    try {
+      await deleteSemesterApi(id);
+      setSemesters((prev: Semester[]) => prev.filter((s) => s.id !== id));
+      toast.success("Semester deleted.");
+    } catch {
+      toast.error("Failed to delete semester");
+    }
+  };
+
   const handleSave = async () => {
     if (!form.academic_year_id || !form.start_date || !form.end_date) {
       toast.error("All fields are required");
@@ -610,12 +672,20 @@ const SemestersPanel = ({
                     )}
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button
-                      onClick={() => openEdit(s)}
-                      className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => openEdit(s)}
+                        className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(s.id)}
+                        className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -750,6 +820,22 @@ const ProgrammesPanel = ({
     setOpen(true);
   };
 
+  const handleDelete = async (id: number) => {
+    if (
+      !confirm(
+        "Delete this programme? All associated courses and sections will also be removed.",
+      )
+    )
+      return;
+    try {
+      await deleteProgrammeApi(id);
+      setProgrammes((prev: Programme[]) => prev.filter((p) => p.id !== id));
+      toast.success("Programme deleted.");
+    } catch {
+      toast.error("Failed to delete programme");
+    }
+  };
+
   const handleSave = async () => {
     if (!form.name) {
       toast.error("Programme name is required");
@@ -828,22 +914,36 @@ const ProgrammesPanel = ({
                   </td>
                 </tr>
               )}
+
               {programmes.map((p) => (
                 <tr key={p.id} className="hover:bg-muted/20 transition-colors">
                   <td className="px-6 py-4 font-medium">{p.name}</td>
+
                   <td className="px-6 py-4 text-muted-foreground font-mono text-xs">
                     {p.code || "—"}
                   </td>
+
                   <td className="px-6 py-4 text-muted-foreground">
                     {p.duration_years} years
                   </td>
+
+                  {/* ✅ FIXED: only ONE td, properly structured */}
                   <td className="px-6 py-4 text-right">
-                    <button
-                      onClick={() => openEdit(p)}
-                      className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => openEdit(p)}
+                        className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        onClick={() => handleDelete(p.id)}
+                        className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -853,68 +953,65 @@ const ProgrammesPanel = ({
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle className="font-display">
-              {editing ? "Edit Programme" : "Add Programme"}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Programme Name *
-              </p>
-              <input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="e.g. Aircraft Maintenance Engineering"
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-4 pt-2">
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Code
+                  Programme Name *
                 </p>
                 <input
-                  value={form.code}
-                  onChange={(e) => setForm({ ...form, code: e.target.value })}
-                  placeholder="e.g. AME"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. Aircraft Maintenance Engineering"
                   className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
-              <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Duration (years)
-                </p>
-                <select
-                  value={form.duration_years}
-                  onChange={(e) =>
-                    setForm({ ...form, duration_years: e.target.value })
-                  }
-                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Code
+                  </p>
+                  <input
+                    value={form.code}
+                    onChange={(e) => setForm({ ...form, code: e.target.value })}
+                    placeholder="e.g. AME"
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Duration (years)
+                  </p>
+                  <select
+                    value={form.duration_years}
+                    onChange={(e) =>
+                      setForm({ ...form, duration_years: e.target.value })
+                    }
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    {[2, 3, 4, 5].map((y) => (
+                      <option key={y} value={y}>
+                        {y} years
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => setOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="bg-primary hover:bg-primary/90"
                 >
-                  {[2, 3, 4, 5].map((y) => (
-                    <option key={y} value={y}>
-                      {y} years
-                    </option>
-                  ))}
-                </select>
+                  {saving ? "Saving..." : "Save"}
+                </Button>
               </div>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleSave}
-                disabled={saving}
-                className="bg-primary hover:bg-primary/90"
-              >
-                {saving ? "Saving..." : "Save"}
-              </Button>
-            </div>
-          </div>
+          </DialogHeader>
         </DialogContent>
       </Dialog>
     </>
@@ -986,6 +1083,168 @@ const SectionsPanel = ({
       toast.success("Section deleted.");
     } catch {
       toast.error("Failed to delete section");
+    }
+  };
+
+  // ── Manage Students ──────────────────────────────────────────────────────────
+  const [manageOpen, setManageOpen] = useState(false);
+  const [managingSection, setManagingSection] = useState<Section | null>(null);
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  const [allStudents, setAllStudents] = useState<Student[]>([]);
+  const [enrollLoading, setEnrollLoading] = useState(false);
+  const [studentSearch, setStudentSearch] = useState("");
+  const [manageTab, setManageTab] = useState<"search" | "csv">("search");
+
+  // CSV import state
+  const [csvText, setCsvText] = useState("");
+  const [csvImporting, setCsvImporting] = useState(false);
+  const [csvPreview, setCsvPreview] = useState<
+    { id: string; found?: number; name?: string; error?: string }[]
+  >([]);
+  const [csvParsed, setCsvParsed] = useState(false);
+
+  const openManage = async (s: Section) => {
+    setManagingSection(s);
+    setManageOpen(true);
+    setManageTab("search");
+    setCsvText("");
+    setCsvPreview([]);
+    setCsvParsed(false);
+    setStudentSearch("");
+    setEnrollLoading(true);
+    try {
+      const [enrollRes, studentRes] = await Promise.all([
+        getEnrollmentsApi({ section: s.id }),
+        getStudentsApi({ active_only: true }),
+      ]);
+      setEnrollments(enrollRes.data);
+      setAllStudents(studentRes.data);
+    } catch {
+      toast.error("Failed to load students");
+    } finally {
+      setEnrollLoading(false);
+    }
+  };
+
+  const enrolledIds = new Set(enrollments.map((e: Enrollment) => e.student));
+
+  const handleEnroll = async (studentId: number) => {
+    if (!managingSection) return;
+    try {
+      const res = await createEnrollmentApi({
+        student_id: studentId,
+        section_id: managingSection.id,
+      });
+      setEnrollments((prev) => [...prev, res.data]);
+      setSections((prev: Section[]) =>
+        prev.map((s: Section) =>
+          s.id === managingSection.id
+            ? { ...s, student_count: s.student_count + 1 }
+            : s,
+        ),
+      );
+      toast.success("Student enrolled!");
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || "Failed to enroll");
+    }
+  };
+
+  const handleUnenroll = async (enrollmentId: number, studentId: number) => {
+    if (!confirm("Remove this student from the section?")) return;
+    try {
+      await deleteEnrollmentApi(enrollmentId);
+      setEnrollments((prev) =>
+        prev.filter((e: Enrollment) => e.id !== enrollmentId),
+      );
+      setSections((prev: Section[]) =>
+        prev.map((s: Section) =>
+          s.id === managingSection?.id
+            ? { ...s, student_count: Math.max(0, s.student_count - 1) }
+            : s,
+        ),
+      );
+      toast.success("Student removed.");
+    } catch {
+      toast.error("Failed to remove student");
+    }
+  };
+
+  const filteredAvailable = allStudents.filter(
+    (s: Student) =>
+      !enrolledIds.has(s.id) &&
+      (studentSearch === "" ||
+        s.full_name.toLowerCase().includes(studentSearch.toLowerCase()) ||
+        s.student_id.toLowerCase().includes(studentSearch.toLowerCase())),
+  );
+
+  // ── CSV helpers ───────────────────────────────────────────────────────────
+  const parseCsvIds = (raw: string): string[] =>
+    raw
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  const handleCsvPreview = () => {
+    const ids = parseCsvIds(csvText);
+    if (ids.length === 0) {
+      toast.error("Paste at least one student ID");
+      return;
+    }
+    const preview = ids.map((id) => {
+      const student = allStudents.find((s: Student) => s.student_id === id);
+      if (!student) return { id, error: "Not found" };
+      if (enrolledIds.has(student.id))
+        return {
+          id,
+          found: student.id,
+          name: student.full_name,
+          error: "Already enrolled",
+        };
+      return { id, found: student.id, name: student.full_name };
+    });
+    setCsvPreview(preview);
+    setCsvParsed(true);
+  };
+
+  const handleCsvImport = async () => {
+    if (!managingSection) return;
+    const toEnroll = csvPreview
+      .filter((r) => r.found && !r.error)
+      .map((r) => r.found as number);
+    if (toEnroll.length === 0) {
+      toast.error("No valid students to import");
+      return;
+    }
+    setCsvImporting(true);
+    try {
+      const res = await bulkEnrollApi({
+        section_id: managingSection.id,
+        student_ids: toEnroll,
+      });
+      const { enrolled } = res.data;
+      // Refresh enrollments list
+      const enrollRes = await getEnrollmentsApi({
+        section: managingSection.id,
+      });
+      setEnrollments(enrollRes.data);
+      setSections((prev: Section[]) =>
+        prev.map((s: Section) =>
+          s.id === managingSection.id
+            ? { ...s, student_count: s.student_count + enrolled }
+            : s,
+        ),
+      );
+      toast.success(
+        `Imported ${enrolled} student${enrolled !== 1 ? "s" : ""}!`,
+      );
+      setCsvText("");
+      setCsvPreview([]);
+      setCsvParsed(false);
+      setManageTab("search");
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || "Import failed");
+    } finally {
+      setCsvImporting(false);
     }
   };
 
@@ -1087,12 +1346,20 @@ const SectionsPanel = ({
                     {s.student_count}
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button
-                      onClick={() => handleDelete(s.id)}
-                      className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => openManage(s)}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                      >
+                        <Users className="w-3 h-3" /> Manage Students
+                      </button>
+                      <button
+                        onClick={() => handleDelete(s.id)}
+                        className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1187,6 +1454,221 @@ const SectionsPanel = ({
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage Students Dialog */}
+      <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-display">
+              Manage Students — Section {managingSection?.name} (
+              {managingSection?.semester_label})
+            </DialogTitle>
+          </DialogHeader>
+          {enrollLoading ? (
+            <div className="py-8 text-center text-muted-foreground text-sm">
+              Loading...
+            </div>
+          ) : (
+            <div className="space-y-5 pt-2">
+              {/* Enrolled list */}
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                  Enrolled ({enrollments.length})
+                </p>
+                {enrollments.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">
+                    No students enrolled yet.
+                  </p>
+                ) : (
+                  <div className="border border-border rounded-lg divide-y divide-border max-h-44 overflow-y-auto">
+                    {enrollments.map((e: Enrollment) => (
+                      <div
+                        key={e.id}
+                        className="flex items-center justify-between px-4 py-2.5"
+                      >
+                        <div>
+                          <p className="text-sm font-medium">
+                            {e.student_name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {e.student_id_number}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleUnenroll(e.id, e.student)}
+                          className="text-xs text-destructive hover:underline px-2 py-1"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Tab switcher */}
+              <div className="flex gap-1 border-b border-border pb-0">
+                <button
+                  onClick={() => setManageTab("search")}
+                  className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+                    manageTab === "search"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  }`}
+                >
+                  Search & Add
+                </button>
+                <button
+                  onClick={() => setManageTab("csv")}
+                  className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+                    manageTab === "csv"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  }`}
+                >
+                  Import by Student ID
+                </button>
+              </div>
+
+              {/* Search tab */}
+              {manageTab === "search" && (
+                <div>
+                  <input
+                    placeholder="Search by name or student ID..."
+                    value={studentSearch}
+                    onChange={(e) => setStudentSearch(e.target.value)}
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring mb-2"
+                  />
+                  <div className="border border-border rounded-lg divide-y divide-border max-h-56 overflow-y-auto">
+                    {filteredAvailable.length === 0 && (
+                      <p className="text-sm text-muted-foreground italic px-4 py-3">
+                        {studentSearch
+                          ? "No students match your search."
+                          : "All students are already enrolled or no students exist."}
+                      </p>
+                    )}
+                    {filteredAvailable.map((s: Student) => (
+                      <div
+                        key={s.id}
+                        className="flex items-center justify-between px-4 py-2.5"
+                      >
+                        <div>
+                          <p className="text-sm font-medium">{s.full_name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {s.student_id} · {s.programme_name}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleEnroll(s.id)}
+                          className="text-xs font-medium text-primary hover:underline px-2 py-1 bg-primary/10 rounded"
+                        >
+                          + Enroll
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* CSV import tab */}
+              {manageTab === "csv" && (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Paste student IDs separated by commas or new lines (e.g.{" "}
+                    <code className="bg-muted px-1 rounded">
+                      STU001, STU002
+                    </code>
+                    ). Students must already exist in the system.
+                  </p>
+                  <textarea
+                    rows={5}
+                    value={csvText}
+                    onChange={(e) => {
+                      setCsvText(e.target.value);
+                      setCsvParsed(false);
+                      setCsvPreview([]);
+                    }}
+                    placeholder={"STU001\nSTU002\nSTU003"}
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring font-mono resize-none"
+                  />
+
+                  {!csvParsed ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleCsvPreview}
+                      disabled={!csvText.trim()}
+                    >
+                      Preview
+                    </Button>
+                  ) : (
+                    <>
+                      <div className="border border-border rounded-lg divide-y divide-border max-h-52 overflow-y-auto text-sm">
+                        {csvPreview.map((row, i) => (
+                          <div
+                            key={i}
+                            className={`flex items-center justify-between px-4 py-2 ${
+                              row.error ? "bg-destructive/5" : "bg-green-500/5"
+                            }`}
+                          >
+                            <div>
+                              <span className="font-mono font-medium">
+                                {row.id}
+                              </span>
+                              {row.name && (
+                                <span className="ml-2 text-muted-foreground">
+                                  {row.name}
+                                </span>
+                              )}
+                            </div>
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded-full ${
+                                row.error
+                                  ? "bg-destructive/10 text-destructive"
+                                  : "bg-green-500/10 text-green-700 dark:text-green-400"
+                              }`}
+                            >
+                              {row.error ?? "Ready"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <p className="text-xs text-muted-foreground flex-1">
+                          {csvPreview.filter((r) => !r.error).length} will be
+                          enrolled, {csvPreview.filter((r) => !!r.error).length}{" "}
+                          skipped
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setCsvParsed(false);
+                            setCsvPreview([]);
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="bg-primary hover:bg-primary/90"
+                          onClick={handleCsvImport}
+                          disabled={
+                            csvImporting ||
+                            csvPreview.filter((r) => !r.error).length === 0
+                          }
+                        >
+                          {csvImporting ? "Importing..." : "Import"}
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </>

@@ -19,18 +19,19 @@ from .models import Student, AttendanceRecord, Course, CourseOffering, Enrollmen
 # HELPER — Get attendance summary for all students in a course
 # ─────────────────────────────────────────
 def get_course_summary(course, start_date=None, end_date=None):
-    # Get sections via CourseAssignment (new structure)
-    assignments = CourseAssignment.objects.filter(course=course)
-    section_ids = assignments.values_list('section_id', flat=True)
-    students = Student.objects.filter(section_id__in=section_ids).distinct()
+    # Get all students enrolled in any section that offers this course
+    offering_ids = CourseOffering.objects.filter(course=course).values_list('id', flat=True)
+    student_ids = AttendanceRecord.objects.filter(
+        course_offering_id__in=offering_ids
+    ).values_list('student_id', flat=True).distinct()
+    students = Student.objects.filter(id__in=student_ids)
 
     summary = []
 
     for student in students:
-        # Attended = present + late
         attended_filters = {
             'student': student,
-            'course': course,
+            'course_offering__course': course,
             'status__in': ['present', 'late'],
         }
         if start_date:
@@ -42,11 +43,11 @@ def get_course_summary(course, start_date=None, end_date=None):
             **attended_filters
         ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
 
-        # Missed = unexcused + excused
+        # 'absent' is the correct status value — not 'unexcused'
         missed_filters = {
             'student': student,
-            'course': course,
-            'status__in': ['unexcused', 'excused'],
+            'course_offering__course': course,
+            'status__in': ['absent', 'excused'],
         }
         if start_date:
             missed_filters['date__gte'] = start_date
@@ -382,7 +383,8 @@ def get_course_offering_summary(offering, start_date=None, end_date=None):
 
     for student in students:
         filters = {'student': student, 'course_offering': offering, 'status__in': ['present', 'late']}
-        missed_filters = {'student': student, 'course_offering': offering, 'status__in': ['unexcused', 'excused']}
+        # 'absent' is the correct status value — not 'unexcused'
+        missed_filters = {'student': student, 'course_offering': offering, 'status__in': ['absent', 'excused']}
         if start_date:
             filters['date__gte'] = start_date
             missed_filters['date__gte'] = start_date

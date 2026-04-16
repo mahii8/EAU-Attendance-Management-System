@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Shield,
   Wrench,
+  Building2,
 } from "lucide-react";
 import eauLogo from "@/assets/eau-logo.png";
 
@@ -24,18 +25,35 @@ interface AdminSidebarProps {
   notificationCount?: number;
 }
 
-const navItems = [
-  { id: "overview", label: "Overview", icon: LayoutDashboard },
-  { id: "students", label: "Students", icon: Users },
-  { id: "courses", label: "Courses", icon: BookOpen },
-  { id: "attendance", label: "Attendance", icon: ClipboardList },
-  { id: "at-risk", label: "At-Risk", icon: AlertTriangle },
-  { id: "user-roles", label: "User Roles", icon: Shield },
-  { id: "reports", label: "Reports", icon: BarChart3 },
-  { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "setup", label: "Setup", icon: Wrench },
-  { id: "settings", label: "Settings", icon: Settings },
+// All nav items — some are admin-only
+const allNavItems = [
+  {
+    id: "overview",
+    label: "Overview",
+    icon: LayoutDashboard,
+    adminOnly: false,
+  },
+  { id: "students", label: "Students", icon: Users, adminOnly: false },
+  { id: "courses", label: "Courses", icon: BookOpen, adminOnly: false },
+  {
+    id: "attendance",
+    label: "Attendance",
+    icon: ClipboardList,
+    adminOnly: false,
+  },
+  { id: "at-risk", label: "At-Risk", icon: AlertTriangle, adminOnly: false },
+  { id: "reports", label: "Reports", icon: BarChart3, adminOnly: false },
+  { id: "notifications", label: "Notifications", icon: Bell, adminOnly: false },
+  { id: "user-roles", label: "User Roles", icon: Shield, adminOnly: true },
+  { id: "setup", label: "Setup", icon: Wrench, adminOnly: true },
+  { id: "settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
+
+const roleScopeLabel: Record<string, string> = {
+  admin: "Admin Portal",
+  dean: "Dean Portal",
+  dept_head: "Dept. Head Portal",
+};
 
 const AdminSidebar = ({
   activeTab,
@@ -44,7 +62,22 @@ const AdminSidebar = ({
   onCollapse,
   notificationCount = 0,
 }: AdminSidebarProps) => {
-  const { signOut } = useAuth();
+  const { signOut, user, role } = useAuth();
+
+  const isAdmin = role === "admin";
+  const scopeLabel = roleScopeLabel[role ?? "admin"] ?? "Admin Portal";
+
+  // Scope description shown under logo (e.g. which programme/school)
+  const scopeDetail = (() => {
+    if (!user) return null;
+    if (role === "dept_head" && (user as any).managed_programme_name)
+      return (user as any).managed_programme_name;
+    if (role === "dean" && (user as any).managed_school_name)
+      return (user as any).managed_school_name;
+    return null;
+  })();
+
+  const navItems = allNavItems.filter((item) => isAdmin || !item.adminOnly);
 
   return (
     <aside
@@ -60,11 +93,19 @@ const AdminSidebar = ({
           className={`object-contain flex-shrink-0 transition-all duration-300 ${collapsed ? "h-9 w-9" : "h-14 w-14"}`}
         />
         {!collapsed && (
-          <div>
+          <div className="min-w-0">
             <p className="font-display font-bold text-base leading-tight">
               EAU Attendance
             </p>
-            <p className="text-xs text-sidebar-foreground/60">Admin Portal</p>
+            <p className="text-xs text-sidebar-foreground/60 truncate">
+              {scopeLabel}
+            </p>
+            {scopeDetail && (
+              <p className="text-xs text-sidebar-foreground/40 truncate flex items-center gap-1 mt-0.5">
+                <Building2 className="w-3 h-3 flex-shrink-0" />
+                {scopeDetail}
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -83,7 +124,7 @@ const AdminSidebar = ({
         </button>
       )}
 
-      {/* Nav — scrollable middle section */}
+      {/* Nav */}
       <nav className="flex-1 px-2 py-2 space-y-0.5 overflow-y-auto">
         {navItems.map(({ id, label, icon: Icon }) => {
           const isActive = activeTab === id;
@@ -110,7 +151,7 @@ const AdminSidebar = ({
         })}
       </nav>
 
-      {/* Sign out — always pinned to bottom */}
+      {/* Sign out */}
       <div className="px-2 py-4 border-t border-sidebar-border flex-shrink-0">
         <button
           onClick={signOut}

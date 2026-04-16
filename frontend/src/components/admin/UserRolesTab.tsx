@@ -24,6 +24,8 @@ import {
   createUserApi,
   updateUserApi,
   deleteUserApi,
+  getProgrammesApi,
+  getSchoolsApi,
 } from "@/api/axios";
 import * as XLSX from "xlsx";
 
@@ -35,10 +37,25 @@ interface User {
   last_name: string;
   email: string;
   role: string;
+  managed_programme?: number | null;
+  managed_programme_name?: string;
+  managed_school?: number | null;
+  managed_school_name?: string;
+}
+
+interface Programme {
+  id: number;
+  name: string;
+}
+interface School {
+  id: number;
+  name: string;
 }
 
 const roleStyles: Record<string, string> = {
   admin: "bg-destructive/10 text-destructive border-destructive/30",
+  dean: "bg-purple-100 text-purple-700 border-purple-300",
+  dept_head: "bg-orange-100 text-orange-700 border-orange-300",
   teacher: "bg-primary/10 text-primary border-primary/30",
 };
 
@@ -51,7 +68,6 @@ const generatePassword = () => {
 };
 
 type ImportType = "teachers" | "admins" | "students" | "parents";
-
 interface ImportResult {
   created: number;
   errors: { row: number; error: string }[];
@@ -105,11 +121,80 @@ const parseFileToRows = async (
   }
 };
 
+const ScopeField = ({
+  role,
+  value,
+  onChange,
+  programmes,
+  schools,
+}: {
+  role: string;
+  value: { managed_programme?: number | null; managed_school?: number | null };
+  onChange: (v: any) => void;
+  programmes: Programme[];
+  schools: School[];
+}) => {
+  if (role === "dept_head") {
+    return (
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Managed Programme *
+        </p>
+        <select
+          value={value.managed_programme ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              managed_programme: e.target.value ? Number(e.target.value) : null,
+            })
+          }
+          className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">— Select programme —</option>
+          {programmes.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+  if (role === "dean") {
+    return (
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Managed School *
+        </p>
+        <select
+          value={value.managed_school ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              managed_school: e.target.value ? Number(e.target.value) : null,
+            })
+          }
+          className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">— Select school —</option>
+          {schools.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+  return null;
+};
+
 const UserRolesTab = () => {
   const [users, setUsers] = useState<User[]>([]);
+  const [programmes, setProgrammes] = useState<Programme[]>([]);
+  const [schools, setSchools] = useState<School[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Edit state
   const [editOpen, setEditOpen] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
   const [editForm, setEditForm] = useState({
@@ -118,12 +203,13 @@ const UserRolesTab = () => {
     email: "",
     role: "",
     password: "",
+    managed_programme: null as number | null,
+    managed_school: null as number | null,
   });
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [showEditPass, setShowEditPass] = useState(false);
 
-  // Add state
   const [addOpen, setAddOpen] = useState(false);
   const [addForm, setAddForm] = useState({
     username: "",
@@ -133,11 +219,12 @@ const UserRolesTab = () => {
     email: "",
     role: "teacher",
     password: "",
+    managed_programme: null as number | null,
+    managed_school: null as number | null,
   });
   const [adding, setAdding] = useState(false);
   const [showAddPass, setShowAddPass] = useState(false);
 
-  // Import state
   const [importOpen, setImportOpen] = useState(false);
   const [importType, setImportType] = useState<ImportType>("teachers");
   const [importing, setImporting] = useState(false);
@@ -145,9 +232,17 @@ const UserRolesTab = () => {
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    getUsersApi()
-      .then((res) => setUsers(res.data))
-      .catch(() => setUsers([]))
+    Promise.all([
+      getUsersApi(),
+      getProgrammesApi({ active_only: true }),
+      getSchoolsApi(),
+    ])
+      .then(([usersRes, progsRes, schoolsRes]) => {
+        setUsers(usersRes.data);
+        setProgrammes(progsRes.data);
+        setSchools(schoolsRes.data);
+      })
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
@@ -159,6 +254,8 @@ const UserRolesTab = () => {
       email: user.email,
       role: user.role,
       password: "",
+      managed_programme: user.managed_programme ?? null,
+      managed_school: user.managed_school ?? null,
     });
     setShowEditPass(false);
     setEditOpen(true);
@@ -173,11 +270,13 @@ const UserRolesTab = () => {
         last_name: editForm.last_name,
         email: editForm.email,
         role: editForm.role,
+        managed_programme_id: editForm.managed_programme,
+        managed_school_id: editForm.managed_school,
       };
       if (editForm.password) payload.password = editForm.password;
-      await updateUserApi(editUser.id, payload);
+      const res = await updateUserApi(editUser.id, payload);
       setUsers((prev) =>
-        prev.map((u) => (u.id === editUser.id ? { ...u, ...payload } : u)),
+        prev.map((u) => (u.id === editUser.id ? res.data : u)),
       );
       toast.success("User updated!");
       setEditOpen(false);
@@ -196,7 +295,7 @@ const UserRolesTab = () => {
       await updateUserApi(editUser.id, { password: newPassword });
       await navigator.clipboard.writeText(newPassword);
       setEditForm((prev) => ({ ...prev, password: newPassword }));
-      toast.success("Password reset and copied to clipboard!");
+      toast.success("Password reset and copied!");
     } catch {
       toast.error("Failed to reset password");
     } finally {
@@ -205,7 +304,7 @@ const UserRolesTab = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this user?")) return;
+    if (!confirm("Delete this user?")) return;
     try {
       await deleteUserApi(id);
       setUsers((prev) => prev.filter((u) => u.id !== id));
@@ -222,7 +321,11 @@ const UserRolesTab = () => {
     }
     setAdding(true);
     try {
-      const res = await createUserApi(addForm);
+      const res = await createUserApi({
+        ...addForm,
+        managed_programme_id: addForm.managed_programme,
+        managed_school_id: addForm.managed_school,
+      } as any);
       setUsers((prev) => [...prev, res.data]);
       toast.success("User created!");
       setAddOpen(false);
@@ -234,6 +337,8 @@ const UserRolesTab = () => {
         email: "",
         role: "teacher",
         password: "",
+        managed_programme: null,
+        managed_school: null,
       });
     } catch (e: any) {
       toast.error(e?.response?.data?.error || "Failed to create user");
@@ -242,7 +347,6 @@ const UserRolesTab = () => {
     }
   };
 
-  // CSV/Excel templates — password is optional
   const csvTemplates: Record<ImportType, { headers: string; example: string }> =
     {
       teachers: {
@@ -296,29 +400,24 @@ const UserRolesTab = () => {
     if (!file) return;
     setImporting(true);
     setImportResults(null);
-
     let rows: Record<string, string>[];
     try {
       rows = await parseFileToRows(file);
     } catch {
-      toast.error(
-        "Failed to read file. Make sure it is a valid CSV or Excel file.",
-      );
+      toast.error("Failed to read file.");
       setImporting(false);
       return;
     }
-
     let created = 0;
     const errors: { row: number; error: string }[] = [];
     const credentials: ImportResult["credentials"] = [];
     const newUsers: User[] = [];
-
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const isParent = importType === "parents";
       const username = isParent ? row.email : row.staff_id || row.email;
       if (!username || !row.email) {
-        errors.push({ row: i + 2, error: "Missing required fields (email)" });
+        errors.push({ row: i + 2, error: "Missing required fields" });
         continue;
       }
       const password = row.password || generatePassword();
@@ -347,16 +446,19 @@ const UserRolesTab = () => {
         });
       }
     }
-
-    // Add all new users to state at once — avoids stale state bug
-    if (newUsers.length > 0) {
-      setUsers((prev) => [...prev, ...newUsers]);
-    }
-
+    if (newUsers.length > 0) setUsers((prev) => [...prev, ...newUsers]);
     setImportResults({ created, errors, credentials });
     setImporting(false);
     if (fileRef.current) fileRef.current.value = "";
     if (created > 0) toast.success(`${created} users imported!`);
+  };
+
+  const scopeSummary = (u: User) => {
+    if (u.role === "dept_head" && u.managed_programme_name)
+      return u.managed_programme_name;
+    if (u.role === "dean" && u.managed_school_name)
+      return u.managed_school_name;
+    return "—";
   };
 
   return (
@@ -411,6 +513,9 @@ const UserRolesTab = () => {
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
                   Role
                 </th>
+                <th className="text-left px-6 py-3 font-medium text-muted-foreground">
+                  Scope
+                </th>
                 <th className="text-right px-6 py-3 font-medium text-muted-foreground">
                   Actions
                 </th>
@@ -420,7 +525,7 @@ const UserRolesTab = () => {
               {loading && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="text-center py-12 text-muted-foreground"
                   >
                     Loading users...
@@ -443,8 +548,11 @@ const UserRolesTab = () => {
                     <span
                       className={`text-xs font-medium px-2.5 py-1 rounded-full border capitalize ${roleStyles[u.role] || "bg-muted text-muted-foreground"}`}
                     >
-                      {u.role}
+                      {u.role === "dept_head" ? "Dept Head" : u.role}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 text-xs text-muted-foreground">
+                    {scopeSummary(u)}
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-2">
@@ -521,14 +629,28 @@ const UserRolesTab = () => {
               <select
                 value={editForm.role}
                 onChange={(e) =>
-                  setEditForm({ ...editForm, role: e.target.value })
+                  setEditForm({
+                    ...editForm,
+                    role: e.target.value,
+                    managed_programme: null,
+                    managed_school: null,
+                  })
                 }
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
               >
-                <option value="admin">Admin</option>
                 <option value="teacher">Teacher</option>
+                <option value="dept_head">Department Head</option>
+                <option value="dean">Dean</option>
+                <option value="admin">Admin</option>
               </select>
             </div>
+            <ScopeField
+              role={editForm.role}
+              value={editForm}
+              onChange={(v) => setEditForm((prev) => ({ ...prev, ...v }))}
+              programmes={programmes}
+              schools={schools}
+            />
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 New Password{" "}
@@ -553,7 +675,6 @@ const UserRolesTab = () => {
                       setEditForm({ ...editForm, password: generatePassword() })
                     }
                     className="p-1 text-muted-foreground hover:text-foreground"
-                    title="Generate password"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                   </button>
@@ -570,23 +691,17 @@ const UserRolesTab = () => {
                   </button>
                 </div>
               </div>
-              {editForm.password && (
-                <p className="text-xs text-muted-foreground font-mono">
-                  {editForm.password}
-                </p>
-              )}
             </div>
             <div className="flex justify-between gap-2 pt-2">
               <Button
                 variant="outline"
                 onClick={handleResetAndCopy}
-                disabled={resetting || !editUser}
+                disabled={resetting}
                 className="gap-1.5 text-muted-foreground"
-                title="Generate a new password, save it, and copy to clipboard"
               >
                 <RefreshCw
                   className={`w-3.5 h-3.5 ${resetting ? "animate-spin" : ""}`}
-                />
+                />{" "}
                 {resetting ? "Resetting..." : "Reset & Copy"}
               </Button>
               <div className="flex gap-2">
@@ -680,6 +795,35 @@ const UserRolesTab = () => {
             </div>
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Role *
+              </p>
+              <select
+                value={addForm.role}
+                onChange={(e) =>
+                  setAddForm({
+                    ...addForm,
+                    role: e.target.value,
+                    managed_programme: null,
+                    managed_school: null,
+                  })
+                }
+                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="teacher">Teacher</option>
+                <option value="dept_head">Department Head</option>
+                <option value="dean">Dean</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <ScopeField
+              role={addForm.role}
+              value={addForm}
+              onChange={(v) => setAddForm((prev) => ({ ...prev, ...v }))}
+              programmes={programmes}
+              schools={schools}
+            />
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Password *
               </p>
               <div className="relative">
@@ -698,7 +842,6 @@ const UserRolesTab = () => {
                       setAddForm({ ...addForm, password: generatePassword() })
                     }
                     className="p-1 text-muted-foreground hover:text-foreground"
-                    title="Generate password"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                   </button>
@@ -715,29 +858,6 @@ const UserRolesTab = () => {
                   </button>
                 </div>
               </div>
-              {addForm.password && (
-                <p className="text-xs text-muted-foreground">
-                  Password:{" "}
-                  <span className="font-mono text-foreground">
-                    {addForm.password}
-                  </span>
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Role *
-              </p>
-              <select
-                value={addForm.role}
-                onChange={(e) =>
-                  setAddForm({ ...addForm, role: e.target.value })
-                }
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="teacher">Teacher</option>
-                <option value="admin">Admin</option>
-              </select>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setAddOpen(false)}>
@@ -774,11 +894,7 @@ const UserRolesTab = () => {
                     <button
                       key={type}
                       onClick={() => setImportType(type)}
-                      className={`px-4 py-2.5 rounded-lg text-sm font-medium border transition-all capitalize ${
-                        importType === type
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "border-border text-muted-foreground hover:bg-muted"
-                      }`}
+                      className={`px-4 py-2.5 rounded-lg text-sm font-medium border transition-all capitalize ${importType === type ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted"}`}
                     >
                       {type}
                     </button>
@@ -786,7 +902,6 @@ const UserRolesTab = () => {
                 )}
               </div>
             </div>
-
             <div className="p-4 bg-muted/30 rounded-lg space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium">Required columns:</p>
@@ -800,18 +915,11 @@ const UserRolesTab = () => {
               <p className="font-mono text-xs text-muted-foreground">
                 {csvTemplates[importType].headers}
               </p>
-              {importType === "parents" && (
-                <p className="text-xs text-muted-foreground">
-                  Parents log in using their email — no staff ID required.
-                </p>
-              )}
               <p className="text-xs text-muted-foreground">
                 Leave <span className="font-medium">password</span> blank to
-                auto-generate one. A credentials file will be available to
-                download after import.
+                auto-generate.
               </p>
             </div>
-
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                 Upload CSV or Excel File
@@ -830,14 +938,9 @@ const UserRolesTab = () => {
                 </p>
               )}
             </div>
-
             {importResults && (
               <div
-                className={`p-3 rounded-lg text-sm ${
-                  importResults.errors.length === 0
-                    ? "bg-primary/10"
-                    : "bg-muted"
-                }`}
+                className={`p-3 rounded-lg text-sm ${importResults.errors.length === 0 ? "bg-primary/10" : "bg-muted"}`}
               >
                 <div className="flex items-center justify-between">
                   <p className="font-medium">
@@ -854,12 +957,6 @@ const UserRolesTab = () => {
                     </button>
                   )}
                 </div>
-                {importResults.credentials.length > 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Download the credentials file and share login details with
-                    each user.
-                  </p>
-                )}
                 {importResults.errors.length > 0 && (
                   <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
                     {importResults.errors.map((e, i) => (
@@ -871,7 +968,6 @@ const UserRolesTab = () => {
                 )}
               </div>
             )}
-
             <div className="flex justify-end">
               <Button variant="outline" onClick={() => setImportOpen(false)}>
                 Close

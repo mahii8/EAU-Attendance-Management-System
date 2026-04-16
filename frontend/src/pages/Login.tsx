@@ -16,30 +16,31 @@ import eauLogo from "@/assets/eau-logo.png";
 const Login = () => {
   const { login } = useAuth();
   const [loading, setLoading] = useState(false);
-  const [username, setUsername] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
-      await login(username, password);
-      // Wait a moment for context state to settle before reading localStorage
-      setTimeout(() => {
-        const role = localStorage.getItem("user_role");
-        toast.success("Logged in successfully");
-        if (role === "admin") {
-          window.location.href = "/admin";
-        } else if (role === "student") {
-          window.location.href = "/student";
-        } else if (role === "parent") {
-          window.location.href = "/parent";
-        } else {
-          window.location.href = "/teacher";
-        }
-      }, 100);
+      await login(identifier, password);
+      const role = localStorage.getItem("user_role");
+      toast.success("Logged in successfully");
+      if (role === "admin") {
+        window.location.href = "/admin";
+      } else if (role === "teacher") {
+        window.location.href = "/teacher";
+      } else if (role === "student") {
+        window.location.href = "/student";
+      } else if (role === "parent") {
+        window.location.href = "/parent";
+      } else {
+        window.location.href = "/teacher";
+      }
     } catch (err: any) {
-      toast.error("Invalid username or password");
+      toast.error(
+        "Invalid credentials. Please check your Staff ID / Email and password.",
+      );
     } finally {
       setLoading(false);
     }
@@ -64,13 +65,13 @@ const Login = () => {
         <CardContent>
           <form onSubmit={handleLogin} className="space-y-4 mt-2">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="identifier">Staff ID or Email</Label>
               <Input
-                id="username"
+                id="identifier"
                 type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter your username"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                placeholder="e.g. TCH001 or your email"
                 required
               />
             </div>

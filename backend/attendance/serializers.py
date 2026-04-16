@@ -2,16 +2,38 @@ from rest_framework import serializers
 from .models import (
     User, Programme, Course, AcademicYear, Semester,
     Section, Student, Enrollment, CourseOffering,
-    AttendanceRecord, Notification, SystemSettings
+    AttendanceRecord, Notification, SystemSettings, School
 )
+
+
+class SchoolSerializer(serializers.ModelSerializer):
+    programme_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = School
+        fields = ['id', 'name', 'code', 'is_active', 'programme_count']
+
+    def get_programme_count(self, obj):
+        return obj.programmes.filter(is_active=True).count()
 
 
 class UserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
+    managed_programme_name = serializers.CharField(
+        source='managed_programme.name', read_only=True
+    )
+    managed_school_name = serializers.CharField(
+        source='managed_school.name', read_only=True
+    )
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'staff_id', 'email', 'first_name', 'last_name', 'full_name', 'role']
+        fields = [
+            'id', 'username', 'staff_id', 'email',
+            'first_name', 'last_name', 'full_name', 'role',
+            'managed_programme', 'managed_programme_name',
+            'managed_school', 'managed_school_name',
+        ]
 
     def get_full_name(self, obj):
         return obj.get_full_name()
@@ -25,10 +47,14 @@ class LoginSerializer(serializers.Serializer):
 class ProgrammeSerializer(serializers.ModelSerializer):
     student_count = serializers.SerializerMethodField()
     course_count = serializers.SerializerMethodField()
+    school_name = serializers.CharField(source='school.name', read_only=True)
 
     class Meta:
         model = Programme
-        fields = ['id', 'name', 'code', 'duration_years', 'is_active', 'student_count', 'course_count']
+        fields = [
+            'id', 'name', 'code', 'duration_years', 'is_active',
+            'school', 'school_name', 'student_count', 'course_count'
+        ]
 
     def get_student_count(self, obj):
         return obj.students.filter(is_active=True).count()
@@ -114,7 +140,6 @@ class StudentSerializer(serializers.ModelSerializer):
         ]
 
     def get_current_section(self, obj):
-        # Get the most recent active enrollment
         enrollment = obj.enrollments.filter(
             status='active'
         ).select_related('section__programme', 'section__semester__academic_year').order_by(

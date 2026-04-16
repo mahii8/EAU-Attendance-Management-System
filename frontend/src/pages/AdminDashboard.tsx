@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useAuth } from "@/hooks/useAuth";
 import AdminSidebar from "@/components/admin/AdminSidebar";
 import AdminHeader from "@/components/admin/AdminHeader";
 import StatsCards from "@/components/admin/StatsCards";
@@ -50,13 +51,11 @@ export interface Course {
   semester?: number;
   is_active?: boolean;
 }
-
 export interface Programme {
   id: number;
   name: string;
   duration_years: number;
 }
-
 export interface Notification {
   id: number;
   message: string;
@@ -65,6 +64,7 @@ export interface Notification {
 }
 
 const AdminDashboard = () => {
+  const { user, role } = useAuth();
   const [activeTab, setActiveTab] = useState("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -75,29 +75,37 @@ const AdminDashboard = () => {
   const [students, setStudents] = useState<
     { id: number; full_name: string; student_id: string }[]
   >([]);
-
-  // Stats from the new /api/stats/ endpoint
   const [stats, setStats] = useState({
     total_students: 0,
     total_courses: 0,
     active_enrollments: 0,
     total_programmes: 0,
-    status_distribution: { present: 0, late: 0, excused: 0, unexcused: 0 },
+    status_distribution: { present: 0, late: 0, excused: 0, absent: 0 },
   });
   const [atRiskCount, setAtRiskCount] = useState(0);
   const [currentSemesterId, setCurrentSemesterId] = useState<
     number | undefined
   >();
 
+  // Build scope filter params for dept_head (backend scopes dean/admin automatically)
+  const scopeParams: Record<string, any> = (() => {
+    if (!user) return {};
+    const u = user as any;
+    if (role === "dept_head" && u.managed_programme)
+      return { programme: u.managed_programme };
+    return {};
+  })();
+
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Get current semester first
         const semRes = await getSemestersApi({ current: true });
         const currentSemester = semRes.data?.[0];
         if (currentSemester) setCurrentSemesterId(currentSemester.id);
-
         const semId = currentSemester?.id;
+        const baseParams = semId
+          ? { semester: semId, ...scopeParams }
+          : scopeParams;
 
         const [
           coursesRes,
@@ -111,8 +119,8 @@ const AdminDashboard = () => {
           getStudentsApi({ active_only: true }),
           getNotificationsApi(),
           getProgrammesApi({ active_only: true }),
-          getStatsApi(semId ? { semester: semId } : {}),
-          getAtRiskApi(semId ? { semester: semId } : {}),
+          getStatsApi(baseParams),
+          getAtRiskApi(baseParams),
         ]);
 
         setCourses(coursesRes.data);
@@ -139,7 +147,7 @@ const AdminDashboard = () => {
     present: stats.status_distribution?.present || 0,
     late: stats.status_distribution?.late || 0,
     exempted: stats.status_distribution?.excused || 0,
-    absent: stats.status_distribution?.unexcused || 0,
+    absent: stats.status_distribution?.absent || 0,
   };
 
   return (
@@ -150,11 +158,8 @@ const AdminDashboard = () => {
           onClick={() => setSidebarOpen(false)}
         />
       )}
-
       <div
-        className={`fixed inset-y-0 left-0 z-50 lg:hidden transform transition-transform duration-300 ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        className={`fixed inset-y-0 left-0 z-50 lg:hidden transform transition-transform duration-300 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
       >
         <AdminSidebar
           activeTab={activeTab}
@@ -194,8 +199,8 @@ const AdminDashboard = () => {
                 atRiskCount={atRiskCount}
                 totalRecords={stats.active_enrollments}
               />
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                <div className="xl:col-span-2">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2">
                   <AttendanceChart />
                 </div>
                 <StatusDistribution
@@ -205,15 +210,14 @@ const AdminDashboard = () => {
                   absent={statusCounts.absent}
                 />
               </div>
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                <div className="xl:col-span-2">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2">
                   <AtRiskTable semesterId={currentSemesterId} />
                 </div>
                 <RecentActivity notifications={notifications} />
               </div>
             </>
           )}
-
           {activeTab === "students" && <StudentsTab programmes={programmes} />}
           {activeTab === "courses" && (
             <CoursesTab

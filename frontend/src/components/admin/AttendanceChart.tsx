@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   BarChart,
   Bar,
@@ -17,7 +17,7 @@ import {
   getOfferingsApi,
   getAttendanceApi,
 } from "@/api/axios";
-import { format, startOfWeek, endOfWeek } from "date-fns";
+import { format, startOfWeek, endOfWeek, subWeeks } from "date-fns";
 
 interface Programme {
   id: number;
@@ -47,8 +47,8 @@ const AttendanceChart = () => {
   const [years, setYears] = useState<number[]>([]);
   const [filterYear, setFilterYear] = useState("1");
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
 
-  // Date range — default to current week
   const [startDate, setStartDate] = useState(
     format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"),
   );
@@ -56,14 +56,23 @@ const AttendanceChart = () => {
     format(endOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd"),
   );
 
-  // Load programmes and semesters on mount
+  // Close picker on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setShowDatePicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
   useEffect(() => {
     Promise.all([getProgrammesApi(), getSemestersApi()]).then(
       ([progRes, semRes]) => {
         setProgrammes(progRes.data);
-        if (progRes.data.length > 0) {
+        if (progRes.data.length > 0)
           setFilterProgramme(String(progRes.data[0].id));
-        }
         const sems = semRes.data || [];
         setSemesters(sems);
         const current = sems.find((s: Semester) => s.is_current);
@@ -72,13 +81,11 @@ const AttendanceChart = () => {
     );
   }, []);
 
-  // When programme or semester changes — update year list and load sections
   useEffect(() => {
     if (!filterProgramme) return;
     const prog = programmes.find((p) => p.id === parseInt(filterProgramme));
     if (prog)
       setYears(Array.from({ length: prog.duration_years }, (_, i) => i + 1));
-
     if (!filterSemester) return;
     getSectionsApi({
       programme: parseInt(filterProgramme),
@@ -90,7 +97,6 @@ const AttendanceChart = () => {
     });
   }, [filterProgramme, filterYear, filterSemester]);
 
-  // Fetch chart data when filters change
   useEffect(() => {
     if (!filterProgramme || !filterSemester) return;
     fetchChartData();
@@ -106,7 +112,6 @@ const AttendanceChart = () => {
   const fetchChartData = async () => {
     setLoading(true);
     try {
-      // Get offerings for the selected filters
       const offeringParams: any = {
         semester: filterSemester,
         programme: filterProgramme,
@@ -122,12 +127,12 @@ const AttendanceChart = () => {
 
       const data = await Promise.all(
         offerings.map(async (offering: any) => {
-          const attendanceParams: any = {
+          const attendanceRes = await getAttendanceApi({
             offering: offering.id,
-          };
-          const attendanceRes = await getAttendanceApi(attendanceParams);
+          });
+          // Normalise date to 'yyyy-MM-dd' string regardless of how API returns it
           const records = attendanceRes.data.filter((r: any) => {
-            const d = r.date;
+            const d = String(r.date).substring(0, 10);
             return d >= startDate && d <= endDate;
           });
 
@@ -138,8 +143,9 @@ const AttendanceChart = () => {
           const excused = records.filter(
             (r: any) => r.status === "excused",
           ).length;
-          const unexcused = records.filter(
-            (r: any) => r.status === "unexcused",
+          // Correct: DB stores 'absent', not 'unexcused'
+          const absent = records.filter(
+            (r: any) => r.status === "absent",
           ).length;
 
           return {
@@ -151,7 +157,7 @@ const AttendanceChart = () => {
             Present: present,
             Late: late,
             Excused: excused,
-            Absent: unexcused,
+            Absent: absent,
           };
         }),
       );
@@ -177,11 +183,10 @@ const AttendanceChart = () => {
   };
 
   const setLastWeek = () => {
-    const lastWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
-    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-    const lastWeekEnd = endOfWeek(lastWeekStart, { weekStartsOn: 1 });
-    setStartDate(format(lastWeekStart, "yyyy-MM-dd"));
-    setEndDate(format(lastWeekEnd, "yyyy-MM-dd"));
+    const s = startOfWeek(subWeeks(new Date(), 1), { weekStartsOn: 1 });
+    const e = endOfWeek(s, { weekStartsOn: 1 });
+    setStartDate(format(s, "yyyy-MM-dd"));
+    setEndDate(format(e, "yyyy-MM-dd"));
     setShowDatePicker(false);
   };
 
@@ -205,7 +210,7 @@ const AttendanceChart = () => {
         >
           {payload.value}
         </text>
-        {hovered && (
+        {hovered && fullName && (
           <g>
             <rect
               x={-70}
@@ -232,7 +237,25 @@ const AttendanceChart = () => {
     );
   };
 
-  const dateRangeLabel = `${format(new Date(startDate), "MMM d")} – ${format(new Date(endDate), "MMM d, yyyy")}`;
+  // Safe date formatting — avoids timezone off-by-one
+  const fmt = (d: string) => format(new Date(d + "T00:00:00"), "MMM d");
+  const dateRangeLabel = `${fmt(startDate)} – ${format(new Date(endDate + "T00:00:00"), "MMM d, yyyy")}`;
+
+  // Calculate picker position so it's never clipped
+  const getPickerStyle = (): React.CSSProperties => {
+    if (!pickerRef.current) return { top: 0, right: 0 };
+    const rect = pickerRef.current.getBoundingClientRect();
+    const pickerHeight = 240;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const top =
+      spaceBelow > pickerHeight ? rect.bottom + 8 : rect.top - pickerHeight - 8;
+    return {
+      position: "fixed",
+      top,
+      right: window.innerWidth - rect.right,
+      zIndex: 9999,
+    };
+  };
 
   return (
     <Card className="shadow-card border-border/50">
@@ -247,7 +270,6 @@ const AttendanceChart = () => {
             </p>
           </div>
           <div className="flex gap-2 flex-wrap items-center">
-            {/* Semester filter */}
             <select
               value={filterSemester}
               onChange={(e) => setFilterSemester(e.target.value)}
@@ -261,7 +283,6 @@ const AttendanceChart = () => {
               ))}
             </select>
 
-            {/* Programme filter */}
             <select
               value={filterProgramme}
               onChange={(e) => setFilterProgramme(e.target.value)}
@@ -274,7 +295,6 @@ const AttendanceChart = () => {
               ))}
             </select>
 
-            {/* Year filter */}
             <select
               value={filterYear}
               onChange={(e) => setFilterYear(e.target.value)}
@@ -287,7 +307,6 @@ const AttendanceChart = () => {
               ))}
             </select>
 
-            {/* Section filter */}
             <select
               value={filterSection}
               onChange={(e) => setFilterSection(e.target.value)}
@@ -301,8 +320,8 @@ const AttendanceChart = () => {
               ))}
             </select>
 
-            {/* Date range picker */}
-            <div className="relative">
+            {/* Date picker — uses fixed positioning to avoid clip */}
+            <div className="relative" ref={pickerRef}>
               <button
                 onClick={() => setShowDatePicker(!showDatePicker)}
                 className="flex items-center gap-1.5 border border-input rounded-lg px-2 py-1 text-xs bg-background hover:bg-muted transition-colors"
@@ -311,7 +330,10 @@ const AttendanceChart = () => {
               </button>
 
               {showDatePicker && (
-                <div className="absolute right-0 top-8 z-50 bg-card border border-border rounded-xl shadow-lg p-4 w-72">
+                <div
+                  className="bg-card border border-border rounded-xl shadow-xl p-4 w-72"
+                  style={getPickerStyle()}
+                >
                   <div className="flex gap-2 mb-3">
                     <button
                       onClick={setCurrentWeek}

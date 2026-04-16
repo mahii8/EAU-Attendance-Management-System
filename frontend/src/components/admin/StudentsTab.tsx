@@ -18,6 +18,7 @@ import {
   getSectionsApi,
   getSemestersApi,
   bulkImportStudentsApi,
+  createUserApi,
 } from "@/api/axios";
 
 interface Programme {
@@ -60,6 +61,29 @@ interface StudentsTabProps {
   programmes: Programme[];
 }
 
+// Auto-generate a default password (student ID + "@EAU")
+const makePassword = (studentId: string) => `${studentId}@EAU`;
+
+// Download a single student's credentials as a CSV
+const downloadCredentialsCsv = (
+  firstName: string,
+  lastName: string,
+  email: string,
+  studentId: string,
+) => {
+  const csv = [
+    "name,email,student_id,password",
+    `${firstName} ${lastName},${email},${studentId},${makePassword(studentId)}`,
+  ].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `credentials_${studentId.replace(/[^a-zA-Z0-9]/g, "_")}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
 const StudentsTab = ({ programmes }: StudentsTabProps) => {
   const [students, setStudents] = useState<Student[]>([]);
   const [search, setSearch] = useState("");
@@ -100,6 +124,8 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
   const [addSections, setAddSections] = useState<Section[]>([]);
   const [addYear, setAddYear] = useState("");
   const [adding, setAdding] = useState(false);
+  // FIX 3: toggle to also create a login account
+  const [createLoginAccount, setCreateLoginAccount] = useState(true);
 
   // Bulk import
   const [importOpen, setImportOpen] = useState(false);
@@ -111,18 +137,20 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
     fetchStudents();
   }, []);
 
+  // FIX 1: don't pass active_only by default — caused the empty list bug
   const fetchStudents = async () => {
     try {
       setLoading(true);
-      const params: any = {};
+      const params: Record<string, string> = {};
       if (filterProgramme) params.programme = filterProgramme;
       if (filterSemester) params.semester = filterSemester;
       if (filterSection) params.section = filterSection;
       if (search) params.search = search;
       const res = await getStudentsApi(params);
-      setStudents(res.data);
+      setStudents(res.data || []);
     } catch (e) {
       console.error(e);
+      toast.error("Failed to load students");
     } finally {
       setLoading(false);
     }
@@ -139,9 +167,9 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
       setFilterSection("");
       return;
     }
-    const params: any = { semester: filterSemester };
+    const params: Record<string, string> = { semester: filterSemester };
     if (filterProgramme) params.programme = filterProgramme;
-    getSectionsApi(params).then((res) => setSections(res.data));
+    getSectionsApi(params).then((res) => setSections(res.data || []));
     setFilterSection("");
   }, [filterSemester, filterProgramme]);
 
@@ -155,7 +183,7 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
       semester: parseInt(addSemester),
       programme: parseInt(addForm.programme_id),
       year: parseInt(addYear),
-    }).then((res) => setAddSections(res.data));
+    }).then((res) => setAddSections(res.data || []));
   }, [addSemester, addYear, addForm.programme_id]);
 
   const openEdit = (student: Student) => {
@@ -211,20 +239,56 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
     }
     setAdding(true);
     try {
-      const payload: any = {
+      // FIX 2: pass args inline — no intermediate payload variable
+      const res = await createStudentApi({
         first_name: addForm.first_name,
         last_name: addForm.last_name,
         student_id: addForm.student_id,
         email: addForm.email,
-        parent_email: addForm.parent_email,
-        parent_telegram: addForm.parent_telegram,
-      };
-      if (addForm.programme_id)
-        payload.programme_id = parseInt(addForm.programme_id);
-      if (addForm.section_id) payload.section_id = parseInt(addForm.section_id);
-      const res = await createStudentApi(payload);
+        parent_email: addForm.parent_email || undefined,
+        parent_telegram: addForm.parent_telegram || undefined,
+        programme_id: addForm.programme_id
+          ? parseInt(addForm.programme_id)
+          : undefined,
+        section_id: addForm.section_id
+          ? parseInt(addForm.section_id)
+          : undefined,
+      });
       setStudents((prev) => [...prev, res.data]);
-      toast.success("Student added!");
+
+      // FIX 3: optionally create a login account so student appears in UserRoles
+      if (createLoginAccount) {
+        try {
+          await createUserApi({
+            username: addForm.email,
+            first_name: addForm.first_name,
+            last_name: addForm.last_name,
+            email: addForm.email,
+            staff_id: addForm.student_id,
+            role: "student",
+            password: makePassword(addForm.student_id),
+          });
+          // Auto-download credentials CSV
+          downloadCredentialsCsv(
+            addForm.first_name,
+            addForm.last_name,
+            addForm.email,
+            addForm.student_id,
+          );
+          toast.success(
+            `Student added! Credentials CSV downloaded. Password: ${makePassword(addForm.student_id)}`,
+            { duration: 8000 },
+          );
+        } catch {
+          toast.success("Student added!");
+          toast.warning(
+            "Could not create login account — an account with this email may already exist.",
+          );
+        }
+      } else {
+        toast.success("Student added!");
+      }
+
       setAddOpen(false);
       setAddForm({
         first_name: "",
@@ -238,6 +302,7 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
       });
       setAddSemester("");
       setAddYear("");
+      setCreateLoginAccount(true);
     } catch (e: any) {
       toast.error(e?.response?.data?.error || "Failed to add student");
     } finally {
@@ -727,6 +792,46 @@ const StudentsTab = ({ programmes }: StudentsTabProps) => {
                 />
               </div>
             </div>
+
+            {/* FIX 3: Login account toggle */}
+            <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-1">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={createLoginAccount}
+                  onChange={(e) => setCreateLoginAccount(e.target.checked)}
+                  className="w-4 h-4 accent-primary"
+                />
+                <div>
+                  <p className="text-sm font-medium">Create login account</p>
+                  <p className="text-xs text-muted-foreground">
+                    Adds this student to User Roles with role{" "}
+                    <strong>student</strong>
+                  </p>
+                </div>
+              </label>
+              {createLoginAccount && addForm.student_id && addForm.email && (
+                <div className="mt-2 ml-7 text-xs text-muted-foreground bg-muted rounded px-2 py-1.5 space-y-0.5">
+                  <p>
+                    Login with:{" "}
+                    <span className="font-mono font-medium">
+                      {addForm.student_id}
+                    </span>{" "}
+                    or{" "}
+                    <span className="font-mono font-medium">
+                      {addForm.email}
+                    </span>
+                  </p>
+                  <p>
+                    Password:{" "}
+                    <span className="font-mono font-medium">
+                      {makePassword(addForm.student_id)}
+                    </span>
+                  </p>
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setAddOpen(false)}>
                 Cancel

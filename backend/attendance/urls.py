@@ -8,11 +8,15 @@ urlpatterns = [
     path('auth/me/', views.MeView.as_view()),
     path('auth/refresh/', TokenRefreshView.as_view()),
 
+    # ── Schools ───────────────────────────────────────
+    path('schools/', views.SchoolListView.as_view()),
+    path('schools/<int:school_id>/', views.SchoolDetailView.as_view()),
+
     # ── Programmes ────────────────────────────────────
     path('programmes/', views.ProgrammeListView.as_view()),
     path('programmes/<int:programme_id>/', views.ProgrammeDetailView.as_view()),
 
-    # ── Courses (templates) ───────────────────────────
+    # ── Courses ───────────────────────────────────────
     path('courses/', views.CourseListView.as_view()),
     path('courses/<int:course_id>/', views.CourseDetailView.as_view()),
 
@@ -28,15 +32,15 @@ urlpatterns = [
     path('sections/', views.SectionListView.as_view()),
     path('sections/<int:section_id>/', views.SectionDetailView.as_view()),
 
-    # ── Students ──────────────────────────────────────
+    # ── Students (static paths before parameterised) ──
     path('students/', views.StudentListView.as_view()),
-    path('students/<int:student_id>/', views.StudentDetailView.as_view()),
     path('students/import/', views.StudentBulkImportView.as_view()),
+    path('students/<int:student_id>/', views.StudentDetailView.as_view()),
 
     # ── Enrollments ───────────────────────────────────
     path('enrollments/', views.EnrollmentListView.as_view()),
-    path('enrollments/<int:enrollment_id>/', views.EnrollmentDetailView.as_view()),
     path('enrollments/bulk/', views.BulkEnrollView.as_view()),
+    path('enrollments/<int:enrollment_id>/', views.EnrollmentDetailView.as_view()),
 
     # ── Course Offerings ──────────────────────────────
     path('offerings/', views.CourseOfferingListView.as_view()),

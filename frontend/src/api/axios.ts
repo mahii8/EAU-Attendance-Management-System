@@ -129,6 +129,7 @@ export const getStudentsApi = (params?: {
   section?: number;
   active_only?: boolean;
   search?: string;
+  student_staff_id?: string;
 }) => api.get("/students/", { params });
 export const createStudentApi = (data: {
   first_name: string;
@@ -198,6 +199,8 @@ export const getAttendanceApi = (params?: {
   section?: number;
   semester?: number;
   programme?: number;
+  student?: number;
+  student_staff_id?: string;
   date?: string;
   search?: string;
 }) => api.get("/attendance/", { params });
@@ -242,60 +245,37 @@ export const markNotificationReadApi = (id: number) =>
 export const getSettingsApi = () => api.get("/settings/");
 export const updateSettingsApi = (data: any) => api.patch("/settings/", data);
 
+// ── Schools ───────────────────────────────────────────────────
+export const getSchoolsApi = (params?: { active_only?: boolean }) =>
+  api.get("/schools/", { params });
+export const createSchoolApi = (data: { name: string; code?: string }) =>
+  api.post("/schools/", data);
+export const updateSchoolApi = (id: number, data: any) =>
+  api.patch(`/schools/${id}/`, data);
+export const deleteSchoolApi = (id: number) => api.delete(`/schools/${id}/`);
+
 // ── Reports ───────────────────────────────────────────────────
+// Fixed: uses axios instead of raw fetch so the auth interceptor
+// fires correctly. Raw fetch was bypassing the interceptor and
+// sending a bad/missing token, causing Django to return 404.
 export const downloadReportApi = async (
   type: "offering" | "student",
   id: number,
   format: "pdf" | "csv",
   reportType: "full" | "weekly" = "full",
 ) => {
-  let token = localStorage.getItem("access_token");
   const url =
     type === "offering"
-      ? `${API_BASE_URL}/reports/offering/${id}/?format=${format}&type=${reportType}`
-      : `${API_BASE_URL}/reports/student/${id}/?format=${format}`;
+      ? `/reports/offering/${id}/?format=${format}&type=${reportType}`
+      : `/reports/student/${id}/?format=${format}`;
 
-  let response = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+  const response = await api.get(url, {
+    responseType: "blob",
   });
 
-  if (response.status === 401) {
-    const refresh = localStorage.getItem("refresh_token");
-    if (refresh) {
-      try {
-        const refreshRes = await fetch(`${API_BASE_URL}/auth/refresh/`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refresh }),
-        });
-        if (refreshRes.ok) {
-          const data = await refreshRes.json();
-          localStorage.setItem("access_token", data.access);
-          token = data.access;
-          response = await fetch(url, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-        }
-      } catch {
-        localStorage.clear();
-        window.location.href = "/login";
-        return;
-      }
-    }
-  }
-
-  if (!response.ok) {
-    let errorMsg = `Server error: ${response.status}`;
-    try {
-      const errData = await response.json();
-      errorMsg = errData.error || errData.detail || errorMsg;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(errorMsg);
-  }
-
-  const blob = await response.blob();
+  const blob = new Blob([response.data], {
+    type: format === "pdf" ? "application/pdf" : "text/csv",
+  });
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
