@@ -13,6 +13,8 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 const ELEVATED_ROLES = ["admin", "dean", "dept_head"];
+const isElevated = (user: any, role: string | null) =>
+  !!user && (user.is_superuser || user.is_staff || (role ? ELEVATED_ROLES.includes(role) : false));
 
 const ProtectedRoute = ({
   children,
@@ -30,7 +32,7 @@ const ProtectedRoute = ({
     );
   if (!user) return <Navigate to="/login" replace />;
   if (allowedRoles && role && !allowedRoles.includes(role)) {
-    if (ELEVATED_ROLES.includes(role)) return <Navigate to="/admin" replace />;
+    if (isElevated(user, role)) return <Navigate to="/admin" replace />;
     if (role === "teacher") return <Navigate to="/teacher" replace />;
     if (role === "student") return <Navigate to="/student" replace />;
     if (role === "parent") return <Navigate to="/parent" replace />;
@@ -48,8 +50,7 @@ const RoleRouter = () => {
       </div>
     );
   if (!user) return <Navigate to="/login" replace />;
-  if (role && ELEVATED_ROLES.includes(role))
-    return <Navigate to="/admin" replace />;
+  if (isElevated(user, role)) return <Navigate to="/admin" replace />;
   if (role === "teacher") return <Navigate to="/teacher" replace />;
   if (role === "student") return <Navigate to="/student" replace />;
   if (role === "parent") return <Navigate to="/parent" replace />;

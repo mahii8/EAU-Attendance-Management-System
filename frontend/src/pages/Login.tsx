@@ -26,7 +26,7 @@ const Login = () => {
       await login(identifier, password);
       const role = localStorage.getItem("user_role");
       toast.success("Logged in successfully");
-      if (role === "admin") {
+      if (role === "admin" || role === "dean" || role === "dept_head") {
         window.location.href = "/admin";
       } else if (role === "teacher") {
         window.location.href = "/teacher";

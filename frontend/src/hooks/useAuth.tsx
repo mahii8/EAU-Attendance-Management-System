@@ -14,6 +14,8 @@ interface User {
   first_name: string;
   last_name: string;
   role: string;
+  is_staff?: boolean;
+  is_superuser?: boolean;
 }
 
 interface AuthContextType {

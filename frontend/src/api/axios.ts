@@ -266,8 +266,8 @@ export const downloadReportApi = async (
 ) => {
   const url =
     type === "offering"
-      ? `/reports/offering/${id}/?format=${format}&type=${reportType}`
-      : `/reports/student/${id}/?format=${format}`;
+      ? `reports/offering/${id}/?report_format=${format}&type=${reportType}`
+      : `reports/student/${id}/?report_format=${format}`;
 
   const response = await api.get(url, {
     responseType: "blob",
@@ -277,12 +277,22 @@ export const downloadReportApi = async (
     type: format === "pdf" ? "application/pdf" : "text/csv",
   });
   const objectUrl = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download =
+  let filename =
     type === "offering"
       ? `offering_${id}_${reportType}.${format}`
       : `student_${id}.${format}`;
+
+  const contentDisposition = response.headers["content-disposition"];
+  if (contentDisposition) {
+    const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+    if (filenameMatch && filenameMatch.length === 2) {
+      filename = filenameMatch[1];
+    }
+  }
+
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
