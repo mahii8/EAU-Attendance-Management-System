@@ -683,7 +683,9 @@ class CourseOfferingListView(APIView):
             'section__semester__academic_year', 'teacher'
         ).all()
 
-        if user.role == 'teacher':
+        # Teachers only see their own offerings; elevated users (including superusers)
+        # can see everything within their scope.
+        if user.role == 'teacher' and not is_elevated(user):
             offerings = offerings.filter(teacher=user)
         else:
             offerings = apply_programme_scope(offerings, user, 'section__programme_id')
@@ -1209,19 +1211,23 @@ class CourseOfferingReportView(APIView):
             offering = CourseOffering.objects.get(id=offering_id)
         except CourseOffering.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-        report_format = request.query_params.get('format', 'pdf')
+        report_format = request.query_params.get('report_format', 'pdf')
         report_type = request.query_params.get('type', 'full')
         try:
+            # Build a meaningful filename: CourseName_SecA_Y2_weekly_2026-04-25
+            course_slug = offering.course.name.replace(' ', '_')
+            section_slug = f"Sec{offering.section.name.replace(' ', '')}_Y{offering.section.year}"
+
             if report_type == 'weekly':
                 end_date = date.today()
                 start_date = end_date - timedelta(days=7)
                 summary = get_course_offering_summary(offering, start_date, end_date)
                 title = "Weekly Attendance Report"
-                filename = f"{offering.course.name}_weekly_{end_date}"
+                filename = f"{course_slug}_{section_slug}_Weekly_Report_{end_date}"
             else:
                 summary = get_course_offering_summary(offering)
                 title = "Full Attendance Report"
-                filename = f"{offering.course.name}_full_report"
+                filename = f"{course_slug}_{section_slug}_Full_Report"
             if report_format == 'csv':
                 return generate_course_csv(offering.course, summary, f"{filename}.csv")
             buffer = generate_course_pdf(offering.course, summary, title)
@@ -1242,7 +1248,7 @@ class StudentReportView(APIView):
             student = Student.objects.get(id=student_id)
         except Student.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-        report_format = request.query_params.get('format', 'pdf')
+        report_format = request.query_params.get('report_format', 'pdf')
         semester_id = request.query_params.get('semester')
         try:
             records_qs = AttendanceRecord.objects.filter(student=student)

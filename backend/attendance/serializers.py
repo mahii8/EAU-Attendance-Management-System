@@ -31,12 +31,23 @@ class UserSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'username', 'staff_id', 'email',
             'first_name', 'last_name', 'full_name', 'role',
+            'is_staff', 'is_superuser',
             'managed_programme', 'managed_programme_name',
             'managed_school', 'managed_school_name',
         ]
 
     def get_full_name(self, obj):
         return obj.get_full_name()
+
+    def to_representation(self, instance):
+        """
+        Frontend routing uses `role` for portal selection.
+        Treat Django superusers as elevated (admin) regardless of the custom role field.
+        """
+        data = super().to_representation(instance)
+        if instance.is_superuser:
+            data['role'] = 'admin'
+        return data
 
 
 class LoginSerializer(serializers.Serializer):

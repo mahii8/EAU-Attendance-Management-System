@@ -93,6 +93,7 @@ CORS_ALLOW_METHODS = [
     'POST',
     'PUT',
 ]
+CORS_EXPOSE_HEADERS = ['Content-Disposition']
 
 # ── REST Framework ────────────────────────────────────
 REST_FRAMEWORK = {
