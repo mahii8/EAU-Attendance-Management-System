@@ -70,10 +70,10 @@ const AdminSidebar = ({
   // Scope description shown under logo (e.g. which programme/school)
   const scopeDetail = (() => {
     if (!user) return null;
-    if (role === "dept_head" && (user as any).managed_programme_name)
+    if (role === "dean" && (user as any).managed_programme_name)
       return (user as any).managed_programme_name;
-    if (role === "dean" && (user as any).managed_school_name)
-      return (user as any).managed_school_name;
+    if (role === "dept_head" && (user as any).managed_department_name)
+      return (user as any).managed_department_name;
     return null;
   })();
 

@@ -61,6 +61,7 @@ export const deleteProgrammeApi = (id: number) =>
 // ── Courses (templates) ───────────────────────────────────────
 export const getCoursesApi = (params?: {
   programme?: number;
+  department?: number;
   year?: number;
   active_only?: boolean;
 }) => api.get("/courses/", { params });
@@ -245,14 +246,48 @@ export const markNotificationReadApi = (id: number) =>
 export const getSettingsApi = () => api.get("/settings/");
 export const updateSettingsApi = (data: any) => api.patch("/settings/", data);
 
-// ── Schools ───────────────────────────────────────────────────
-export const getSchoolsApi = (params?: { active_only?: boolean }) =>
-  api.get("/schools/", { params });
-export const createSchoolApi = (data: { name: string; code?: string }) =>
-  api.post("/schools/", data);
-export const updateSchoolApi = (id: number, data: any) =>
-  api.patch(`/schools/${id}/`, data);
-export const deleteSchoolApi = (id: number) => api.delete(`/schools/${id}/`);
+// ── Departments ──────────────────────────────────────────────
+export const getDepartmentsApi = (params?: {
+  programme?: number;
+  active_only?: boolean;
+}) => api.get("/departments/", { params });
+export const createDepartmentApi = (data: {
+  name: string;
+  code?: string;
+  programme_id: number;
+}) => api.post("/departments/", data);
+export const updateDepartmentApi = (id: number, data: any) =>
+  api.patch(`/departments/${id}/`, data);
+export const deleteDepartmentApi = (id: number) =>
+  api.delete(`/departments/${id}/`);
+
+// ── Attendance Excel ──────────────────────────────────────────────────────────
+export const downloadAttendanceTemplateApi = (
+  offeringId: number,
+  params?: { week_start?: string; start_date?: string; end_date?: string },
+) =>
+  api.get(`/attendance/template/${offeringId}/`, {
+    params,
+    responseType: "blob",
+  });
+
+export const previewAttendanceImportApi = (file: File) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("preview_only", "true");
+  return api.post("/attendance/import/", fd, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
+
+export const submitAttendanceImportApi = (file: File) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("preview_only", "false");
+  return api.post("/attendance/import/", fd, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
 
 // ── Reports ───────────────────────────────────────────────────
 // Fixed: uses axios instead of raw fetch so the auth interceptor
@@ -266,8 +301,8 @@ export const downloadReportApi = async (
 ) => {
   const url =
     type === "offering"
-      ? `reports/offering/${id}/?report_format=${format}&type=${reportType}`
-      : `reports/student/${id}/?report_format=${format}`;
+      ? `/reports/offering/${id}/?format=${format}&type=${reportType}`
+      : `/reports/student/${id}/?format=${format}`;
 
   const response = await api.get(url, {
     responseType: "blob",
@@ -277,22 +312,12 @@ export const downloadReportApi = async (
     type: format === "pdf" ? "application/pdf" : "text/csv",
   });
   const objectUrl = URL.createObjectURL(blob);
-  let filename =
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download =
     type === "offering"
       ? `offering_${id}_${reportType}.${format}`
       : `student_${id}.${format}`;
-
-  const contentDisposition = response.headers["content-disposition"];
-  if (contentDisposition) {
-    const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
-    if (filenameMatch && filenameMatch.length === 2) {
-      filename = filenameMatch[1];
-    }
-  }
-
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download = filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

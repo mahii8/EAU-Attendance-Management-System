@@ -7,18 +7,6 @@ from django.dispatch import receiver
 
 
 # ─────────────────────────────────────────
-# SCHOOL  (groups programmes under a dean)
-# ─────────────────────────────────────────
-class School(models.Model):
-    name = models.CharField(max_length=200)
-    code = models.CharField(max_length=20, blank=True, default='')
-    is_active = models.BooleanField(default=True)
-
-    def __str__(self):
-        return self.name
-
-
-# ─────────────────────────────────────────
 # USER
 # ─────────────────────────────────────────
 class User(AbstractUser):
@@ -27,18 +15,20 @@ class User(AbstractUser):
         ('dept_head', 'Department Head'),
         ('dean',      'Dean'),
         ('admin',     'Admin'),
+        ('student',   'Student'),
     )
     staff_id = models.CharField(max_length=30, unique=True, blank=True, null=True)
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='teacher')
 
-    # Scope fields — only relevant for dept_head and dean
+    # Dean manages a whole Programme (= School/Faculty in EAU terms)
     managed_programme = models.ForeignKey(
         'Programme', on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='department_heads'
-    )
-    managed_school = models.ForeignKey(
-        School, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='deans'
+    )
+    # Dept Head manages one Department within a Programme
+    managed_department = models.ForeignKey(
+        'Department', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='department_heads'
     )
 
     def __str__(self):
@@ -48,46 +38,60 @@ class User(AbstractUser):
         return self.role == 'admin' or self.is_superuser
 
     def is_elevated(self):
-        """Admin, dean, and dept_head all use AdminDashboard."""
         return self.role in ('admin', 'dean', 'dept_head') or self.is_superuser
-
-    def get_programme_scope(self):
-        """
-        Returns a Programme queryset this user can access.
-        Returns None for unrestricted (admin/superuser).
-        """
-        if self.is_admin_or_super():
-            return None
-        if self.role == 'dept_head' and self.managed_programme_id:
-            from attendance.models import Programme
-            return Programme.objects.filter(id=self.managed_programme_id)
-        if self.role == 'dean' and self.managed_school_id:
-            return self.managed_school.programmes.filter(is_active=True)
-        return None
 
 
 # ─────────────────────────────────────────
 # ACADEMIC STRUCTURE
 # ─────────────────────────────────────────
 class Programme(models.Model):
+    """
+    In EAU terms this is a School/Faculty.
+    e.g. 'School of Aircraft Maintenance Engineering'
+    A Dean manages one Programme.
+    """
     name = models.CharField(max_length=150)
     code = models.CharField(max_length=20, blank=True, default='')
     duration_years = models.IntegerField(default=4)
     is_active = models.BooleanField(default=True)
-    # Link programme to a school so dean scope is automatic
-    school = models.ForeignKey(
-        School, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='programmes'
-    )
 
     def __str__(self):
         return self.name
 
 
+class Department(models.Model):
+    """
+    A Department lives inside a Programme (School/Faculty).
+    e.g. 'Engineering Drawing Dept' inside 'Aircraft Maintenance Engineering'
+    A Department Head manages one Department.
+    """
+    name = models.CharField(max_length=200)
+    code = models.CharField(max_length=20, blank=True, default='')
+    programme = models.ForeignKey(
+        Programme, on_delete=models.CASCADE, related_name='departments'
+    )
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.programme.name})"
+
+
 class Course(models.Model):
+    """
+    A Course belongs to a Programme (required).
+    Optionally also linked to a Department within that Programme.
+    Courses without a department are still fully functional.
+    """
     name = models.CharField(max_length=150)
     code = models.CharField(max_length=20, blank=True, default='')
-    programme = models.ForeignKey(Programme, on_delete=models.CASCADE, related_name='courses')
+    programme = models.ForeignKey(
+        Programme, on_delete=models.CASCADE, related_name='courses'
+    )
+    # Optional — course can belong to a specific department
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='courses'
+    )
     year = models.IntegerField(default=1)
     total_credit_hours = models.DecimalField(
         max_digits=5, decimal_places=1, validators=[MinValueValidator(1)]
@@ -222,22 +226,28 @@ class CourseOffering(models.Model):
 class AttendanceRecord(models.Model):
     STATUS_CHOICES = (
         ('present', 'Present'),
-        ('late', 'Late'),
+        ('late',    'Late'),
         ('excused', 'Excused'),
-        ('absent', 'Absent'),
+        ('absent',  'Absent'),
     )
     SESSION_TYPE_CHOICES = (
-        ('theory', 'Theory'),
+        ('theory',    'Theory'),
         ('practical', 'Practical'),
     )
-    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='attendance_records')
-    course_offering = models.ForeignKey(CourseOffering, on_delete=models.CASCADE, related_name='attendance_records')
+    student = models.ForeignKey(
+        Student, on_delete=models.CASCADE, related_name='attendance_records'
+    )
+    course_offering = models.ForeignKey(
+        CourseOffering, on_delete=models.CASCADE, related_name='attendance_records'
+    )
     date = models.DateField()
     status = models.CharField(max_length=10, choices=STATUS_CHOICES)
     session_type = models.CharField(
         max_length=15, choices=SESSION_TYPE_CHOICES, default='theory'
     )
-    hours_attended = models.DecimalField(max_digits=4, decimal_places=1, default=Decimal('1.0'))
+    hours_attended = models.DecimalField(
+        max_digits=4, decimal_places=1, default=Decimal('1.0')
+    )
     recorded_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True,
         related_name='recorded_attendance'
@@ -255,12 +265,13 @@ class AttendanceRecord(models.Model):
 # ─────────────────────────────────────────
 class Notification(models.Model):
     NOTIFICATION_TYPE_CHOICES = (
-        ('absence', 'Absence Alert'),
+        ('absence',   'Absence Alert'),
         ('threshold', 'Threshold Warning'),
-        ('info', 'Information'),
+        ('info',      'Information'),
     )
     recipient = models.ForeignKey(
-        User, on_delete=models.CASCADE, null=True, blank=True, related_name='notifications'
+        User, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='notifications'
     )
     notification_type = models.CharField(
         max_length=20, choices=NOTIFICATION_TYPE_CHOICES, default='info'
@@ -268,7 +279,7 @@ class Notification(models.Model):
     message = models.TextField()
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
-    # Scope tag — lets dept_heads/deans filter to their programme
+    # Scope tag at programme level so dean/dept_head see relevant notifications
     programme = models.ForeignKey(
         Programme, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='notifications'

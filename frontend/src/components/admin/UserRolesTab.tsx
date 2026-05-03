@@ -25,7 +25,7 @@ import {
   updateUserApi,
   deleteUserApi,
   getProgrammesApi,
-  getSchoolsApi,
+  getDepartmentsApi,
 } from "@/api/axios";
 import * as XLSX from "xlsx";
 
@@ -39,17 +39,18 @@ interface User {
   role: string;
   managed_programme?: number | null;
   managed_programme_name?: string;
-  managed_school?: number | null;
-  managed_school_name?: string;
+  managed_department?: number | null;
+  managed_department_name?: string;
 }
 
 interface Programme {
   id: number;
   name: string;
 }
-interface School {
+interface Department {
   id: number;
   name: string;
+  programme_name?: string;
 }
 
 const roleStyles: Record<string, string> = {
@@ -57,6 +58,16 @@ const roleStyles: Record<string, string> = {
   dean: "bg-purple-100 text-purple-700 border-purple-300",
   dept_head: "bg-orange-100 text-orange-700 border-orange-300",
   teacher: "bg-primary/10 text-primary border-primary/30",
+  student: "bg-blue-100 text-blue-700 border-blue-300",
+};
+
+// Human-readable role labels
+const roleLabels: Record<string, string> = {
+  admin: "Admin",
+  dean: "Dean",
+  dept_head: "Dept Head",
+  teacher: "Teacher",
+  student: "Student",
 };
 
 const generatePassword = () => {
@@ -126,19 +137,22 @@ const ScopeField = ({
   value,
   onChange,
   programmes,
-  schools,
+  departments,
 }: {
   role: string;
-  value: { managed_programme?: number | null; managed_school?: number | null };
+  value: {
+    managed_programme?: number | null;
+    managed_department?: number | null;
+  };
   onChange: (v: any) => void;
   programmes: Programme[];
-  schools: School[];
+  departments: Department[];
 }) => {
-  if (role === "dept_head") {
+  if (role === "dean") {
     return (
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          Managed Programme *
+          Managed Programme (School) *
         </p>
         <select
           value={value.managed_programme ?? ""}
@@ -150,7 +164,7 @@ const ScopeField = ({
           }
           className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
         >
-          <option value="">— Select programme —</option>
+          <option value="">— Select school/programme —</option>
           {programmes.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -160,29 +174,37 @@ const ScopeField = ({
       </div>
     );
   }
-  if (role === "dean") {
+  if (role === "dept_head") {
     return (
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          Managed School *
+          Managed Department *
         </p>
         <select
-          value={value.managed_school ?? ""}
+          value={value.managed_department ?? ""}
           onChange={(e) =>
             onChange({
               ...value,
-              managed_school: e.target.value ? Number(e.target.value) : null,
+              managed_department: e.target.value
+                ? Number(e.target.value)
+                : null,
             })
           }
           className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
         >
-          <option value="">— Select school —</option>
-          {schools.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
+          <option value="">— Select department —</option>
+          {departments.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+              {d.programme_name ? ` (${d.programme_name})` : ""}
             </option>
           ))}
         </select>
+        {departments.length === 0 && (
+          <p className="text-xs text-destructive mt-1">
+            No departments yet. Go to Setup → Departments to create one first.
+          </p>
+        )}
       </div>
     );
   }
@@ -192,7 +214,7 @@ const ScopeField = ({
 const UserRolesTab = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [programmes, setProgrammes] = useState<Programme[]>([]);
-  const [schools, setSchools] = useState<School[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [editOpen, setEditOpen] = useState(false);
@@ -204,7 +226,7 @@ const UserRolesTab = () => {
     role: "",
     password: "",
     managed_programme: null as number | null,
-    managed_school: null as number | null,
+    managed_department: null as number | null,
   });
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -220,7 +242,7 @@ const UserRolesTab = () => {
     role: "teacher",
     password: "",
     managed_programme: null as number | null,
-    managed_school: null as number | null,
+    managed_department: null as number | null,
   });
   const [adding, setAdding] = useState(false);
   const [showAddPass, setShowAddPass] = useState(false);
@@ -235,12 +257,12 @@ const UserRolesTab = () => {
     Promise.all([
       getUsersApi(),
       getProgrammesApi({ active_only: true }),
-      getSchoolsApi(),
+      getDepartmentsApi({ active_only: true }),
     ])
-      .then(([usersRes, progsRes, schoolsRes]) => {
+      .then(([usersRes, progsRes, departmentsRes]) => {
         setUsers(usersRes.data);
         setProgrammes(progsRes.data);
-        setSchools(schoolsRes.data);
+        setDepartments(departmentsRes.data);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -255,7 +277,7 @@ const UserRolesTab = () => {
       role: user.role,
       password: "",
       managed_programme: user.managed_programme ?? null,
-      managed_school: user.managed_school ?? null,
+      managed_department: user.managed_department ?? null,
     });
     setShowEditPass(false);
     setEditOpen(true);
@@ -271,7 +293,7 @@ const UserRolesTab = () => {
         email: editForm.email,
         role: editForm.role,
         managed_programme_id: editForm.managed_programme,
-        managed_school_id: editForm.managed_school,
+        managed_department_id: editForm.managed_department,
       };
       if (editForm.password) payload.password = editForm.password;
       const res = await updateUserApi(editUser.id, payload);
@@ -324,7 +346,7 @@ const UserRolesTab = () => {
       const res = await createUserApi({
         ...addForm,
         managed_programme_id: addForm.managed_programme,
-        managed_school_id: addForm.managed_school,
+        managed_department_id: addForm.managed_department,
       } as any);
       setUsers((prev) => [...prev, res.data]);
       toast.success("User created!");
@@ -338,7 +360,7 @@ const UserRolesTab = () => {
         role: "teacher",
         password: "",
         managed_programme: null,
-        managed_school: null,
+        managed_department: null,
       });
     } catch (e: any) {
       toast.error(e?.response?.data?.error || "Failed to create user");
@@ -456,8 +478,8 @@ const UserRolesTab = () => {
   const scopeSummary = (u: User) => {
     if (u.role === "dept_head" && u.managed_programme_name)
       return u.managed_programme_name;
-    if (u.role === "dean" && u.managed_school_name)
-      return u.managed_school_name;
+    if (u.role === "dean" && u.managed_programme_name)
+      return u.managed_programme_name;
     return "—";
   };
 
@@ -633,7 +655,7 @@ const UserRolesTab = () => {
                     ...editForm,
                     role: e.target.value,
                     managed_programme: null,
-                    managed_school: null,
+                    managed_department: null,
                   })
                 }
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
@@ -642,6 +664,7 @@ const UserRolesTab = () => {
                 <option value="dept_head">Department Head</option>
                 <option value="dean">Dean</option>
                 <option value="admin">Admin</option>
+                <option value="student">Student</option>
               </select>
             </div>
             <ScopeField
@@ -649,7 +672,7 @@ const UserRolesTab = () => {
               value={editForm}
               onChange={(v) => setEditForm((prev) => ({ ...prev, ...v }))}
               programmes={programmes}
-              schools={schools}
+              departments={departments}
             />
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -804,7 +827,7 @@ const UserRolesTab = () => {
                     ...addForm,
                     role: e.target.value,
                     managed_programme: null,
-                    managed_school: null,
+                    managed_department: null,
                   })
                 }
                 className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
@@ -813,6 +836,7 @@ const UserRolesTab = () => {
                 <option value="dept_head">Department Head</option>
                 <option value="dean">Dean</option>
                 <option value="admin">Admin</option>
+                <option value="student">Student</option>
               </select>
             </div>
             <ScopeField
@@ -820,7 +844,7 @@ const UserRolesTab = () => {
               value={addForm}
               onChange={(v) => setAddForm((prev) => ({ ...prev, ...v }))}
               programmes={programmes}
-              schools={schools}
+              departments={departments}
             />
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">

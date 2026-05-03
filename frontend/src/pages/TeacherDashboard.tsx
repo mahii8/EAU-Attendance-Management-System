@@ -1,3 +1,4 @@
+import AttendanceImportModal from "@/components/admin/AttendanceImportModal";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,13 +32,12 @@ import {
   LogOut,
   Plus,
   Clock,
+  FileSpreadsheet,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import eauLogo from "@/assets/eau-logo.png";
 import {
-  getProgrammesApi,
-  getSectionsApi,
   getSemestersApi,
   getOfferingsApi,
   getOfferingStudentsApi,
@@ -45,21 +45,11 @@ import {
   submitAttendanceApi,
 } from "@/api/axios";
 
-interface Programme {
-  id: number;
-  name: string;
-  duration_years: number;
-}
 interface Semester {
   id: number;
   label: string;
   number: number;
   is_current: boolean;
-}
-interface Section {
-  id: number;
-  name: string;
-  year: number;
 }
 interface Offering {
   id: number;
@@ -78,36 +68,33 @@ interface Student {
   student_id: string;
 }
 
-type AttendanceStatus = "present" | "late" | "excused" | "unexcused";
+type AttendanceStatus = "present" | "late" | "excused" | "absent";
 
 const statusLabels: Record<AttendanceStatus, string> = {
   present: "Present",
   late: "Late",
   excused: "Excused",
-  unexcused: "Absent",
+  absent: "Absent",
 };
 
 const TeacherDashboard = () => {
   const { signOut, user } = useAuth();
 
-  // Selection state
-  const [programmes, setProgrammes] = useState<Programme[]>([]);
   const [semesters, setSemesters] = useState<Semester[]>([]);
-  const [selectedProgramme, setSelectedProgramme] = useState("");
   const [selectedSemester, setSelectedSemester] = useState("");
-  const [years, setYears] = useState<number[]>([]);
-  const [selectedYear, setSelectedYear] = useState("");
-  const [sections, setSections] = useState<Section[]>([]);
-  const [selectedSection, setSelectedSection] = useState("");
-  const [offerings, setOfferings] = useState<Offering[]>([]);
-  const [selectedOffering, setSelectedOffering] = useState("");
 
-  // Data state
+  // All offerings assigned to this teacher for the selected semester
+  const [myOfferings, setMyOfferings] = useState<Offering[]>([]);
+  const [selectedOffering, setSelectedOffering] = useState("");
+  const [loadingOfferings, setLoadingOfferings] = useState(false);
+
+  // Derived from selected offering
   const [students, setStudents] = useState<Student[]>([]);
   const [summary, setSummary] = useState<any[]>([]);
 
-  // Modal state
+  // Modal
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [attendanceDate, setAttendanceDate] = useState(
     format(new Date(), "yyyy-MM-dd"),
@@ -130,57 +117,34 @@ const TeacherDashboard = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Load programmes and semesters on mount
+  // Load semesters on mount, auto-select current
   useEffect(() => {
-    Promise.all([getProgrammesApi(), getSemestersApi()]).then(
-      ([progRes, semRes]) => {
-        setProgrammes(progRes.data);
-        const sems = semRes.data || [];
-        setSemesters(sems);
-        // Auto-select current semester
-        const current = sems.find((s: Semester) => s.is_current);
-        if (current) setSelectedSemester(String(current.id));
-      },
-    );
+    getSemestersApi().then((res) => {
+      const sems = res.data || [];
+      setSemesters(sems);
+      const current = sems.find((s: Semester) => s.is_current);
+      if (current) setSelectedSemester(String(current.id));
+    });
   }, []);
 
-  // When programme selected — build year list
+  // When semester changes — load THIS teacher's offerings for that semester
   useEffect(() => {
-    if (!selectedProgramme) return;
-    const prog = programmes.find((p) => p.id === parseInt(selectedProgramme));
-    if (prog)
-      setYears(Array.from({ length: prog.duration_years }, (_, i) => i + 1));
-    setSelectedYear("");
-    setSelectedSection("");
+    if (!selectedSemester) return;
+    setLoadingOfferings(true);
+    setMyOfferings([]);
     setSelectedOffering("");
-    setSections([]);
-    setOfferings([]);
     setStudents([]);
-  }, [selectedProgramme]);
+    setSummary([]);
 
-  // When year selected — load sections
-  useEffect(() => {
-    if (!selectedProgramme || !selectedYear || !selectedSemester) return;
-    getSectionsApi({
-      programme: parseInt(selectedProgramme),
-      year: parseInt(selectedYear),
-      semester: parseInt(selectedSemester),
-    }).then((res) => setSections(res.data));
-    setSelectedSection("");
-    setSelectedOffering("");
-    setOfferings([]);
-    setStudents([]);
-  }, [selectedYear, selectedSemester]);
-
-  // When section selected — load course offerings for this teacher
-  useEffect(() => {
-    if (!selectedSection) return;
-    getOfferingsApi({ section: parseInt(selectedSection) }).then((res) => {
-      setOfferings(res.data);
-    });
-    setSelectedOffering("");
-    setStudents([]);
-  }, [selectedSection]);
+    // The backend already filters by logged-in teacher when role=teacher
+    // (CourseOfferingListView does: if user.role == 'teacher': filter(teacher=user))
+    getOfferingsApi({ semester: parseInt(selectedSemester) })
+      .then((res) => {
+        setMyOfferings(res.data || []);
+      })
+      .catch(() => setMyOfferings([]))
+      .finally(() => setLoadingOfferings(false));
+  }, [selectedSemester]);
 
   // When offering selected — load students and summary
   useEffect(() => {
@@ -201,11 +165,8 @@ const TeacherDashboard = () => {
     });
   }, [selectedOffering]);
 
-  const currentOffering = offerings.find(
+  const currentOffering = myOfferings.find(
     (o) => o.id === parseInt(selectedOffering),
-  );
-  const currentSection = sections.find(
-    (s) => s.id === parseInt(selectedSection),
   );
 
   const getDisplayName = (name: string) => {
@@ -266,7 +227,7 @@ const TeacherDashboard = () => {
       </header>
 
       <main className="p-3 lg:p-4 max-w-6xl mx-auto space-y-4">
-        {/* Step-by-step selectors */}
+        {/* Semester + Course selector */}
         <Card className="shadow-card border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="font-display text-base">
@@ -274,7 +235,7 @@ const TeacherDashboard = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Semester */}
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -297,107 +258,111 @@ const TeacherDashboard = () => {
                 </Select>
               </div>
 
-              {/* Programme */}
+              {/* Course offering — only shows teacher's own */}
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Programme
-                </p>
-                <Select
-                  value={selectedProgramme}
-                  onValueChange={setSelectedProgramme}
-                  disabled={!selectedSemester}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select programme" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {programmes.map((p) => (
-                      <SelectItem key={p.id} value={String(p.id)}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Year */}
-              <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Year
-                </p>
-                <Select
-                  value={selectedYear}
-                  onValueChange={setSelectedYear}
-                  disabled={!selectedProgramme}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select year" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {years.map((y) => (
-                      <SelectItem key={y} value={String(y)}>
-                        Year {y}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Section */}
-              <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Section
-                </p>
-                <Select
-                  value={selectedSection}
-                  onValueChange={setSelectedSection}
-                  disabled={!selectedYear}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select section" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sections.map((s) => (
-                      <SelectItem key={s.id} value={String(s.id)}>
-                        Section {s.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Course Offering */}
-              <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Course
+                  Your Assigned Course
                 </p>
                 <Select
                   value={selectedOffering}
                   onValueChange={setSelectedOffering}
-                  disabled={!selectedSection || offerings.length === 0}
+                  disabled={!selectedSemester || loadingOfferings}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select course" />
+                    <SelectValue
+                      placeholder={
+                        loadingOfferings
+                          ? "Loading your courses..."
+                          : myOfferings.length === 0 && selectedSemester
+                            ? "No courses assigned this semester"
+                            : "Select course"
+                      }
+                    />
                   </SelectTrigger>
                   <SelectContent>
-                    {offerings.map((o) => (
+                    {myOfferings.map((o) => (
                       <SelectItem key={o.id} value={String(o.id)}>
-                        {o.course_name}
+                        {o.course_name} — {o.programme_name} · Yr{" "}
+                        {o.section_year} · Sec {o.section_name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {myOfferings.length === 0 &&
+                  selectedSemester &&
+                  !loadingOfferings && (
+                    <p className="text-xs text-destructive mt-1">
+                      No courses assigned to you for this semester. Ask the
+                      admin to assign you to a course offering.
+                    </p>
+                  )}
               </div>
             </div>
 
+            {/* Course info strip */}
+            {currentOffering && (
+              <div className="mt-4 p-3 rounded-lg bg-muted/40 border border-border flex flex-wrap gap-4 text-sm">
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide">
+                    Programme
+                  </span>
+                  <p className="font-medium">
+                    {currentOffering.programme_name}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide">
+                    Section
+                  </span>
+                  <p className="font-medium">
+                    Section {currentOffering.section_name} · Year{" "}
+                    {currentOffering.section_year}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide">
+                    Course Code
+                  </span>
+                  <p className="font-medium">
+                    {currentOffering.course_code || "—"}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide">
+                    Credit Hours
+                  </span>
+                  <p className="font-medium">
+                    {currentOffering.total_credit_hours} hrs
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide">
+                    Semester
+                  </span>
+                  <p className="font-medium">
+                    {currentOffering.semester_label}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {isReadyToLog && (
               <div className="mt-4 flex justify-end">
-                <Button
-                  className="gap-1.5 bg-primary hover:bg-primary/90"
-                  onClick={() => setDialogOpen(true)}
-                >
-                  <Plus className="w-4 h-4" /> Log Attendance
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="gap-1.5"
+                    onClick={() => setImportOpen(true)}
+                  >
+                    <FileSpreadsheet className="w-4 h-4" /> Import Excel
+                  </Button>
+                  <Button
+                    className="gap-1.5 bg-primary hover:bg-primary/90"
+                    onClick={() => setDialogOpen(true)}
+                  >
+                    <Plus className="w-4 h-4" /> Log Attendance
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>
@@ -416,7 +381,7 @@ const TeacherDashboard = () => {
                     {students.length}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Section {currentSection?.name} Students
+                    Section {currentOffering.section_name} Students
                   </p>
                 </div>
               </CardContent>
@@ -576,19 +541,15 @@ const TeacherDashboard = () => {
                 : "Welcome to Teacher Portal"}
             </h2>
             <p className="text-muted-foreground text-sm lg:text-base mb-6 max-w-sm">
-              Select a class to get started logging attendance and viewing
-              student records.
+              Select a semester to see your assigned courses, then pick a course
+              to start logging attendance.
             </p>
             <div className="inline-flex items-center gap-2 text-xs lg:text-sm font-medium text-muted-foreground bg-muted/40 backdrop-blur-sm px-4 py-2 rounded-full border border-border/60 shadow-sm">
               <span className="text-foreground/80">Semester</span>
               <span className="text-muted-foreground/40">→</span>
-              <span className="text-foreground/80">Programme</span>
+              <span className="text-foreground/80">Your Course</span>
               <span className="text-muted-foreground/40">→</span>
-              <span className="text-foreground/80">Year</span>
-              <span className="text-muted-foreground/40">→</span>
-              <span className="text-foreground/80">Section</span>
-              <span className="text-muted-foreground/40">→</span>
-              <span className="text-foreground/80">Course</span>
+              <span className="text-foreground/80">Log Attendance</span>
             </div>
           </div>
         )}
@@ -605,7 +566,9 @@ const TeacherDashboard = () => {
                 </DialogTitle>
                 <p className="text-sm text-muted-foreground mt-0.5">
                   {currentOffering?.course_name} — Section{" "}
-                  {currentSection?.name}
+                  {currentOffering?.section_name}
+                  {" · "}
+                  {currentOffering?.programme_name}
                 </p>
               </div>
               <div className="flex items-center gap-1.5 bg-muted px-3 py-1.5 rounded-lg text-sm font-mono">
@@ -708,7 +671,7 @@ const TeacherDashboard = () => {
                               "present",
                               "late",
                               "excused",
-                              "unexcused",
+                              "absent",
                             ] as AttendanceStatus[]
                           ).map((s) => (
                             <button
@@ -761,7 +724,7 @@ const TeacherDashboard = () => {
                 <span className="text-primary font-medium">
                   {students.length}
                 </span>{" "}
-                students in Section {currentSection?.name}
+                students in Section {currentOffering?.section_name}
               </p>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setDialogOpen(false)}>
@@ -779,6 +742,12 @@ const TeacherDashboard = () => {
           </div>
         </DialogContent>
       </Dialog>
+      {/* Import Excel Modal */}
+      <AttendanceImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        offering={currentOffering}
+      />
     </div>
   );
 };

@@ -18,6 +18,7 @@ import {
   Users,
   GraduationCap,
   Layers,
+  Building2,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -33,6 +34,10 @@ import {
   createProgrammeApi,
   updateProgrammeApi,
   deleteProgrammeApi,
+  getDepartmentsApi,
+  createDepartmentApi,
+  updateDepartmentApi,
+  deleteDepartmentApi,
   getSectionsApi,
   createSectionApi,
   deleteSectionApi,
@@ -49,7 +54,6 @@ import {
   bulkEnrollApi,
 } from "@/api/axios";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
 interface AcademicYear {
   id: number;
   name: string;
@@ -75,6 +79,15 @@ interface Programme {
   code: string;
   duration_years: number;
   is_active: boolean;
+}
+interface Department {
+  id: number;
+  name: string;
+  code: string;
+  programme: number;
+  programme_name: string;
+  is_active: boolean;
+  course_count: number;
 }
 interface Section {
   id: number;
@@ -124,34 +137,38 @@ interface User {
   role: string;
 }
 
-// ─── Step indicator ───────────────────────────────────────────────────────────
 const steps = [
   { id: "years", label: "Academic Years", icon: Calendar },
   { id: "semesters", label: "Semesters", icon: Layers },
   { id: "programmes", label: "Programmes", icon: GraduationCap },
+  { id: "departments", label: "Departments", icon: Building2 },
   { id: "sections", label: "Sections", icon: Users },
   { id: "offerings", label: "Course Offerings", icon: BookOpen },
 ];
 
-// ─── Main component ────────────────────────────────────────────────────────────
+const inputCls =
+  "w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring";
+const labelCls =
+  "text-xs font-medium text-muted-foreground uppercase tracking-wide";
+
 const SetupTab = () => {
   const [activeStep, setActiveStep] = useState("years");
-
-  // Data
   const [years, setYears] = useState<AcademicYear[]>([]);
   const [semesters, setSemesters] = useState<Semester[]>([]);
   const [programmes, setProgrammes] = useState<Programme[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [offerings, setOfferings] = useState<Offering[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
-
-  // Filters for sections/offerings
   const [filterSemester, setFilterSemester] = useState("");
   const [filterProgramme, setFilterProgramme] = useState("");
 
   useEffect(() => {
     getProgrammesApi().then((r) => setProgrammes(r.data));
+    getDepartmentsApi({ active_only: true }).then((r) =>
+      setDepartments(r.data),
+    );
     getCoursesApi().then((r) => setCourses(r.data));
     getUsersApi({ role: "teacher" }).then((r) => setTeachers(r.data));
     getAcademicYearsApi().then((r) => setYears(r.data));
@@ -159,22 +176,21 @@ const SetupTab = () => {
   }, []);
 
   useEffect(() => {
-    const params: any = {};
-    if (filterSemester) params.semester = filterSemester;
-    if (filterProgramme) params.programme = filterProgramme;
-    getSectionsApi(params).then((r) => setSections(r.data));
+    const p: any = {};
+    if (filterSemester) p.semester = filterSemester;
+    if (filterProgramme) p.programme = filterProgramme;
+    getSectionsApi(p).then((r) => setSections(r.data));
   }, [filterSemester, filterProgramme]);
 
   useEffect(() => {
-    const params: any = {};
-    if (filterSemester) params.semester = filterSemester;
-    if (filterProgramme) params.programme = filterProgramme;
-    getOfferingsApi(params).then((r) => setOfferings(r.data));
+    const p: any = {};
+    if (filterSemester) p.semester = filterSemester;
+    if (filterProgramme) p.programme = filterProgramme;
+    getOfferingsApi(p).then((r) => setOfferings(r.data));
   }, [filterSemester, filterProgramme]);
 
   return (
     <div className="space-y-6">
-      {/* Step navigation */}
       <Card className="shadow-card border-border/50">
         <CardContent className="p-4">
           <div className="flex items-center gap-1 flex-wrap">
@@ -185,11 +201,7 @@ const SetupTab = () => {
                 <div key={step.id} className="flex items-center gap-1">
                   <button
                     onClick={() => setActiveStep(step.id)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      isActive
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }`}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
                   >
                     <Icon className="w-4 h-4" />
                     {step.label}
@@ -204,7 +216,6 @@ const SetupTab = () => {
         </CardContent>
       </Card>
 
-      {/* Step content */}
       {activeStep === "years" && (
         <AcademicYearsPanel years={years} setYears={setYears} />
       )}
@@ -219,6 +230,13 @@ const SetupTab = () => {
         <ProgrammesPanel
           programmes={programmes}
           setProgrammes={setProgrammes}
+        />
+      )}
+      {activeStep === "departments" && (
+        <DepartmentsPanel
+          departments={departments}
+          setDepartments={setDepartments}
+          programmes={programmes}
         />
       )}
       {activeStep === "sections" && (
@@ -252,7 +270,7 @@ const SetupTab = () => {
   );
 };
 
-// ─── Academic Years Panel ─────────────────────────────────────────────────────
+// ─── Academic Years ───────────────────────────────────────────────────────────
 const AcademicYearsPanel = ({
   years,
   setYears,
@@ -289,40 +307,40 @@ const AcademicYearsPanel = ({
   const handleDelete = async (id: number) => {
     if (
       !confirm(
-        "Delete this academic year? All semesters and sections inside it will also be deleted.",
+        "Delete this academic year? All semesters inside it will also be deleted.",
       )
     )
       return;
     try {
       await deleteAcademicYearApi(id);
-      setYears((prev: AcademicYear[]) => prev.filter((y) => y.id !== id));
-      toast.success("Academic year deleted.");
+      setYears((p: AcademicYear[]) => p.filter((y) => y.id !== id));
+      toast.success("Deleted.");
     } catch {
-      toast.error("Failed to delete academic year");
+      toast.error("Failed to delete");
     }
   };
 
   const handleSave = async () => {
     if (!form.name || !form.start_date || !form.end_date) {
-      toast.error("All fields are required");
+      toast.error("All fields required");
       return;
     }
     setSaving(true);
     try {
       if (editing) {
-        const res = await updateAcademicYearApi(editing.id, form);
-        setYears((prev: AcademicYear[]) =>
-          prev.map((y) => (y.id === editing.id ? res.data : y)),
+        const r = await updateAcademicYearApi(editing.id, form);
+        setYears((p: AcademicYear[]) =>
+          p.map((y) => (y.id === editing.id ? r.data : y)),
         );
-        toast.success("Academic year updated!");
+        toast.success("Updated!");
       } else {
-        const res = await createAcademicYearApi(form);
-        setYears((prev: AcademicYear[]) => [...prev, res.data]);
-        toast.success("Academic year created!");
+        const r = await createAcademicYearApi(form);
+        setYears((p: AcademicYear[]) => [...p, r.data]);
+        toast.success("Created!");
       }
       setOpen(false);
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || "Failed to save");
+      toast.error(e?.response?.data?.error || "Failed");
     } finally {
       setSaving(false);
     }
@@ -356,10 +374,10 @@ const AcademicYearsPanel = ({
                   Name
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
-                  Start Date
+                  Start
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
-                  End Date
+                  End
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
                   Semesters
@@ -379,7 +397,7 @@ const AcademicYearsPanel = ({
                     colSpan={6}
                     className="text-center py-12 text-muted-foreground"
                   >
-                    No academic years yet. Add one to get started.
+                    No academic years yet.
                   </td>
                 </tr>
               )}
@@ -424,51 +442,44 @@ const AcademicYearsPanel = ({
           </table>
         </CardContent>
       </Card>
-
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="font-display">
-              {editing ? "Edit Academic Year" : "Add Academic Year"}
+              {editing ? "Edit" : "Add"} Academic Year
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Name *
-              </p>
+              <p className={labelCls}>Name *</p>
               <input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="e.g. 2024/2025"
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Start Date *
-                </p>
+                <p className={labelCls}>Start Date *</p>
                 <input
                   type="date"
                   value={form.start_date}
                   onChange={(e) =>
                     setForm({ ...form, start_date: e.target.value })
                   }
-                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  className={inputCls}
                 />
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  End Date *
-                </p>
+                <p className={labelCls}>End Date *</p>
                 <input
                   type="date"
                   value={form.end_date}
                   onChange={(e) =>
                     setForm({ ...form, end_date: e.target.value })
                   }
-                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  className={inputCls}
                 />
               </div>
             </div>
@@ -481,7 +492,7 @@ const AcademicYearsPanel = ({
                 }
                 className="w-4 h-4"
               />
-              <span className="text-sm">Set as current academic year</span>
+              <span className="text-sm">Set as current</span>
             </label>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setOpen(false)}>
@@ -502,7 +513,7 @@ const AcademicYearsPanel = ({
   );
 };
 
-// ─── Semesters Panel ──────────────────────────────────────────────────────────
+// ─── Semesters ────────────────────────────────────────────────────────────────
 const SemestersPanel = ({
   semesters,
   setSemesters,
@@ -547,46 +558,41 @@ const SemestersPanel = ({
   };
 
   const handleDelete = async (id: number) => {
-    if (
-      !confirm(
-        "Delete this semester? All sections inside it will also be deleted.",
-      )
-    )
-      return;
+    if (!confirm("Delete this semester?")) return;
     try {
       await deleteSemesterApi(id);
-      setSemesters((prev: Semester[]) => prev.filter((s) => s.id !== id));
-      toast.success("Semester deleted.");
+      setSemesters((p: Semester[]) => p.filter((s) => s.id !== id));
+      toast.success("Deleted.");
     } catch {
-      toast.error("Failed to delete semester");
+      toast.error("Failed");
     }
   };
 
   const handleSave = async () => {
     if (!form.academic_year_id || !form.start_date || !form.end_date) {
-      toast.error("All fields are required");
+      toast.error("All fields required");
       return;
     }
     setSaving(true);
     try {
       if (editing) {
-        const res = await updateSemesterApi(editing.id, form);
-        setSemesters((prev: Semester[]) =>
-          prev.map((s) => (s.id === editing.id ? res.data : s)),
+        const r = await updateSemesterApi(editing.id, form);
+        setSemesters((p: Semester[]) =>
+          p.map((s) => (s.id === editing.id ? r.data : s)),
         );
-        toast.success("Semester updated!");
+        toast.success("Updated!");
       } else {
-        const res = await createSemesterApi({
+        const r = await createSemesterApi({
           ...form,
           academic_year_id: parseInt(form.academic_year_id),
           number: parseInt(form.number),
         });
-        setSemesters((prev: Semester[]) => [...prev, res.data]);
-        toast.success("Semester created!");
+        setSemesters((p: Semester[]) => [...p, r.data]);
+        toast.success("Created!");
       }
       setOpen(false);
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || "Failed to save");
+      toast.error(e?.response?.data?.error || "Failed");
     } finally {
       setSaving(false);
     }
@@ -599,7 +605,7 @@ const SemestersPanel = ({
           <div>
             <CardTitle className="font-display text-base">Semesters</CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
-              Add Semester 1 and Semester 2 for each academic year
+              Add Semester 1 and 2 for each academic year
             </p>
           </div>
           <Button
@@ -621,10 +627,10 @@ const SemestersPanel = ({
                   Academic Year
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
-                  Start Date
+                  Start
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
-                  End Date
+                  End
                 </th>
                 <th className="text-left px-6 py-3 font-medium text-muted-foreground">
                   Sections
@@ -644,8 +650,7 @@ const SemestersPanel = ({
                     colSpan={7}
                     className="text-center py-12 text-muted-foreground"
                   >
-                    No semesters yet. Create an academic year first, then add
-                    semesters.
+                    No semesters yet.
                   </td>
                 </tr>
               )}
@@ -693,27 +698,24 @@ const SemestersPanel = ({
           </table>
         </CardContent>
       </Card>
-
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="font-display">
-              {editing ? "Edit Semester" : "Add Semester"}
+              {editing ? "Edit" : "Add"} Semester
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Academic Year *
-              </p>
+              <p className={labelCls}>Academic Year *</p>
               <select
                 value={form.academic_year_id}
                 onChange={(e) =>
                   setForm({ ...form, academic_year_id: e.target.value })
                 }
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               >
-                <option value="">Select academic year</option>
+                <option value="">Select year</option>
                 {years.map((y) => (
                   <option key={y.id} value={y.id}>
                     {y.name}
@@ -722,13 +724,11 @@ const SemestersPanel = ({
               </select>
             </div>
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Semester Number *
-              </p>
+              <p className={labelCls}>Semester Number *</p>
               <select
                 value={form.number}
                 onChange={(e) => setForm({ ...form, number: e.target.value })}
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               >
                 <option value="1">Semester 1</option>
                 <option value="2">Semester 2</option>
@@ -736,29 +736,25 @@ const SemestersPanel = ({
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Start Date *
-                </p>
+                <p className={labelCls}>Start Date *</p>
                 <input
                   type="date"
                   value={form.start_date}
                   onChange={(e) =>
                     setForm({ ...form, start_date: e.target.value })
                   }
-                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  className={inputCls}
                 />
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  End Date *
-                </p>
+                <p className={labelCls}>End Date *</p>
                 <input
                   type="date"
                   value={form.end_date}
                   onChange={(e) =>
                     setForm({ ...form, end_date: e.target.value })
                   }
-                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  className={inputCls}
                 />
               </div>
             </div>
@@ -792,7 +788,7 @@ const SemestersPanel = ({
   );
 };
 
-// ─── Programmes Panel ─────────────────────────────────────────────────────────
+// ─── Programmes ───────────────────────────────────────────────────────────────
 const ProgrammesPanel = ({
   programmes,
   setProgrammes,
@@ -821,24 +817,19 @@ const ProgrammesPanel = ({
   };
 
   const handleDelete = async (id: number) => {
-    if (
-      !confirm(
-        "Delete this programme? All associated courses and sections will also be removed.",
-      )
-    )
-      return;
+    if (!confirm("Delete this programme?")) return;
     try {
       await deleteProgrammeApi(id);
-      setProgrammes((prev: Programme[]) => prev.filter((p) => p.id !== id));
-      toast.success("Programme deleted.");
+      setProgrammes((p: Programme[]) => p.filter((x) => x.id !== id));
+      toast.success("Deleted.");
     } catch {
-      toast.error("Failed to delete programme");
+      toast.error("Failed");
     }
   };
 
   const handleSave = async () => {
     if (!form.name) {
-      toast.error("Programme name is required");
+      toast.error("Name required");
       return;
     }
     setSaving(true);
@@ -849,19 +840,19 @@ const ProgrammesPanel = ({
         duration_years: parseInt(form.duration_years),
       };
       if (editing) {
-        const res = await updateProgrammeApi(editing.id, payload);
-        setProgrammes((prev: Programme[]) =>
-          prev.map((p) => (p.id === editing.id ? res.data : p)),
+        const r = await updateProgrammeApi(editing.id, payload);
+        setProgrammes((p: Programme[]) =>
+          p.map((x) => (x.id === editing.id ? r.data : x)),
         );
-        toast.success("Programme updated!");
+        toast.success("Updated!");
       } else {
-        const res = await createProgrammeApi(payload);
-        setProgrammes((prev: Programme[]) => [...prev, res.data]);
-        toast.success("Programme added!");
+        const r = await createProgrammeApi(payload);
+        setProgrammes((p: Programme[]) => [...p, r.data]);
+        toast.success("Added!");
       }
       setOpen(false);
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || "Failed to save");
+      toast.error(e?.response?.data?.error || "Failed");
     } finally {
       setSaving(false);
     }
@@ -872,9 +863,12 @@ const ProgrammesPanel = ({
       <Card className="shadow-card border-border/50">
         <CardHeader className="flex flex-row items-center justify-between pb-4">
           <div>
-            <CardTitle className="font-display text-base">Programmes</CardTitle>
+            <CardTitle className="font-display text-base">
+              Programmes (Schools)
+            </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
-              Define the study programmes offered by the institution
+              Each programme = a School/Faculty. e.g. "School of Aircraft
+              Maintenance Engineering". Deans are assigned to a programme.
             </p>
           </div>
           <Button
@@ -914,20 +908,15 @@ const ProgrammesPanel = ({
                   </td>
                 </tr>
               )}
-
               {programmes.map((p) => (
                 <tr key={p.id} className="hover:bg-muted/20 transition-colors">
                   <td className="px-6 py-4 font-medium">{p.name}</td>
-
                   <td className="px-6 py-4 text-muted-foreground font-mono text-xs">
                     {p.code || "—"}
                   </td>
-
                   <td className="px-6 py-4 text-muted-foreground">
                     {p.duration_years} years
                   </td>
-
-                  {/* ✅ FIXED: only ONE td, properly structured */}
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-1">
                       <button
@@ -936,7 +925,6 @@ const ProgrammesPanel = ({
                       >
                         <Pencil className="w-4 h-4" />
                       </button>
-
                       <button
                         onClick={() => handleDelete(p.id)}
                         className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
@@ -951,74 +939,312 @@ const ProgrammesPanel = ({
           </table>
         </CardContent>
       </Card>
-
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
-            <div className="space-y-4 pt-2">
+            <DialogTitle className="font-display">
+              {editing ? "Edit" : "Add"} Programme
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <p className={labelCls}>Programme Name *</p>
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. School of Aircraft Maintenance Engineering"
+                className={inputCls}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Programme Name *
-                </p>
+                <p className={labelCls}>Code</p>
                 <input
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g. Aircraft Maintenance Engineering"
-                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  value={form.code}
+                  onChange={(e) => setForm({ ...form, code: e.target.value })}
+                  placeholder="e.g. AME"
+                  className={inputCls}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Code
-                  </p>
-                  <input
-                    value={form.code}
-                    onChange={(e) => setForm({ ...form, code: e.target.value })}
-                    placeholder="e.g. AME"
-                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Duration (years)
-                  </p>
-                  <select
-                    value={form.duration_years}
-                    onChange={(e) =>
-                      setForm({ ...form, duration_years: e.target.value })
-                    }
-                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    {[2, 3, 4, 5].map((y) => (
-                      <option key={y} value={y}>
-                        {y} years
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={() => setOpen(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleSave}
-                  disabled={saving}
-                  className="bg-primary hover:bg-primary/90"
+              <div className="space-y-1.5">
+                <p className={labelCls}>Duration</p>
+                <select
+                  value={form.duration_years}
+                  onChange={(e) =>
+                    setForm({ ...form, duration_years: e.target.value })
+                  }
+                  className={inputCls}
                 >
-                  {saving ? "Saving..." : "Save"}
-                </Button>
+                  {[2, 3, 4, 5].map((y) => (
+                    <option key={y} value={y}>
+                      {y} years
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
-          </DialogHeader>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSave}
+                disabled={saving}
+                className="bg-primary hover:bg-primary/90"
+              >
+                {saving ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </>
   );
 };
 
-// ─── Sections Panel ───────────────────────────────────────────────────────────
+// ─── Departments ──────────────────────────────────────────────────────────────
+const DepartmentsPanel = ({
+  departments,
+  setDepartments,
+  programmes,
+}: {
+  departments: Department[];
+  setDepartments: any;
+  programmes: Programme[];
+}) => {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Department | null>(null);
+  const [form, setForm] = useState({ name: "", code: "", programme_id: "" });
+  const [saving, setSaving] = useState(false);
+  const [filterProg, setFilterProg] = useState("");
+
+  const openAdd = () => {
+    setEditing(null);
+    setForm({ name: "", code: "", programme_id: "" });
+    setOpen(true);
+  };
+  const openEdit = (d: Department) => {
+    setEditing(d);
+    setForm({ name: d.name, code: d.code, programme_id: String(d.programme) });
+    setOpen(true);
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm("Remove this department?")) return;
+    try {
+      await deleteDepartmentApi(id);
+      setDepartments((p: Department[]) => p.filter((d) => d.id !== id));
+      toast.success("Removed.");
+    } catch {
+      toast.error("Failed");
+    }
+  };
+
+  const handleSave = async () => {
+    if (!form.name || !form.programme_id) {
+      toast.error("Name and Programme required");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name,
+        code: form.code,
+        programme_id: parseInt(form.programme_id),
+      };
+      if (editing) {
+        const r = await updateDepartmentApi(editing.id, payload);
+        setDepartments((p: Department[]) =>
+          p.map((d) => (d.id === editing.id ? r.data : d)),
+        );
+        toast.success("Updated!");
+      } else {
+        const r = await createDepartmentApi(payload);
+        setDepartments((p: Department[]) => [...p, r.data]);
+        toast.success("Department added!");
+      }
+      setOpen(false);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || "Failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filtered = filterProg
+    ? departments.filter((d) => String(d.programme) === filterProg)
+    : departments;
+
+  return (
+    <>
+      <Card className="shadow-card border-border/50">
+        <CardHeader className="pb-4">
+          <div className="flex flex-row items-start justify-between">
+            <div>
+              <CardTitle className="font-display text-base">
+                Departments
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Each department belongs to a Programme (School). e.g.
+                "Engineering Drawing Dept" inside "Aircraft Maintenance
+                Engineering". Department Heads are assigned to a department.
+                Courses can optionally be linked to a department.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              className="gap-1.5 bg-primary hover:bg-primary/90"
+              onClick={openAdd}
+            >
+              <Plus className="w-4 h-4" /> Add Department
+            </Button>
+          </div>
+          <div className="mt-3">
+            <select
+              value={filterProg}
+              onChange={(e) => setFilterProg(e.target.value)}
+              className="border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">All Programmes</option>
+              {programmes.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <table className="w-full text-sm">
+            <thead className="border-y border-border bg-muted/30">
+              <tr>
+                <th className="text-left px-6 py-3 font-medium text-muted-foreground">
+                  Department Name
+                </th>
+                <th className="text-left px-6 py-3 font-medium text-muted-foreground">
+                  Code
+                </th>
+                <th className="text-left px-6 py-3 font-medium text-muted-foreground">
+                  Programme (School)
+                </th>
+                <th className="text-left px-6 py-3 font-medium text-muted-foreground">
+                  Courses
+                </th>
+                <th className="text-right px-6 py-3 font-medium text-muted-foreground">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filtered.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="text-center py-12 text-muted-foreground"
+                  >
+                    {departments.length === 0
+                      ? "No departments yet. Create programmes first, then add departments."
+                      : "No departments for the selected programme."}
+                  </td>
+                </tr>
+              )}
+              {filtered.map((d) => (
+                <tr key={d.id} className="hover:bg-muted/20 transition-colors">
+                  <td className="px-6 py-4 font-medium">{d.name}</td>
+                  <td className="px-6 py-4 text-muted-foreground font-mono text-xs">
+                    {d.code || "—"}
+                  </td>
+                  <td className="px-6 py-4 text-muted-foreground">
+                    {d.programme_name}
+                  </td>
+                  <td className="px-6 py-4 text-muted-foreground">
+                    {d.course_count}
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => openEdit(d)}
+                        className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(d.id)}
+                        className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display">
+              {editing ? "Edit" : "Add"} Department
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <p className={labelCls}>Programme (School) *</p>
+              <select
+                value={form.programme_id}
+                onChange={(e) =>
+                  setForm({ ...form, programme_id: e.target.value })
+                }
+                className={inputCls}
+              >
+                <option value="">Select programme</option>
+                {programmes.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <p className={labelCls}>Department Name *</p>
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. Engineering Drawing Department"
+                className={inputCls}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <p className={labelCls}>Code</p>
+              <input
+                value={form.code}
+                onChange={(e) => setForm({ ...form, code: e.target.value })}
+                placeholder="e.g. ENG-DRAW"
+                className={inputCls}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSave}
+                disabled={saving}
+                className="bg-primary hover:bg-primary/90"
+              >
+                {saving ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
+
+// ─── Sections ─────────────────────────────────────────────────────────────────
 const SectionsPanel = ({
   sections,
   setSections,
@@ -1037,7 +1263,6 @@ const SectionsPanel = ({
     semester_id: "",
   });
   const [saving, setSaving] = useState(false);
-
   const selectedProg = programmes.find(
     (p: Programme) => p.id === parseInt(form.programme_id),
   );
@@ -1050,43 +1275,39 @@ const SectionsPanel = ({
 
   const handleSave = async () => {
     if (!form.name || !form.programme_id || !form.semester_id) {
-      toast.error("All fields are required");
+      toast.error("All fields required");
       return;
     }
     setSaving(true);
     try {
-      const res = await createSectionApi({
+      const r = await createSectionApi({
         name: form.name,
         programme_id: parseInt(form.programme_id),
         year: parseInt(form.year),
         semester_id: parseInt(form.semester_id),
       });
-      setSections((prev: Section[]) => [...prev, res.data]);
+      setSections((p: Section[]) => [...p, r.data]);
       toast.success("Section created!");
       setOpen(false);
       setForm({ name: "", programme_id: "", year: "1", semester_id: "" });
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || "Failed to create section");
+      toast.error(e?.response?.data?.error || "Failed");
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Delete this section? All enrollments will be removed."))
-      return;
+    if (!confirm("Delete this section?")) return;
     try {
       await deleteSectionApi(id);
-      setSections((prev: Section[]) =>
-        prev.filter((s: Section) => s.id !== id),
-      );
-      toast.success("Section deleted.");
+      setSections((p: Section[]) => p.filter((s: Section) => s.id !== id));
+      toast.success("Deleted.");
     } catch {
-      toast.error("Failed to delete section");
+      toast.error("Failed");
     }
   };
 
-  // ── Manage Students ──────────────────────────────────────────────────────────
   const [manageOpen, setManageOpen] = useState(false);
   const [managingSection, setManagingSection] = useState<Section | null>(null);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
@@ -1094,8 +1315,6 @@ const SectionsPanel = ({
   const [enrollLoading, setEnrollLoading] = useState(false);
   const [studentSearch, setStudentSearch] = useState("");
   const [manageTab, setManageTab] = useState<"search" | "csv">("search");
-
-  // CSV import state
   const [csvText, setCsvText] = useState("");
   const [csvImporting, setCsvImporting] = useState(false);
   const [csvPreview, setCsvPreview] = useState<
@@ -1113,14 +1332,14 @@ const SectionsPanel = ({
     setStudentSearch("");
     setEnrollLoading(true);
     try {
-      const [enrollRes, studentRes] = await Promise.all([
+      const [er, sr] = await Promise.all([
         getEnrollmentsApi({ section: s.id }),
         getStudentsApi({ active_only: true }),
       ]);
-      setEnrollments(enrollRes.data);
-      setAllStudents(studentRes.data);
+      setEnrollments(er.data);
+      setAllStudents(sr.data);
     } catch {
-      toast.error("Failed to load students");
+      toast.error("Failed to load");
     } finally {
       setEnrollLoading(false);
     }
@@ -1131,41 +1350,39 @@ const SectionsPanel = ({
   const handleEnroll = async (studentId: number) => {
     if (!managingSection) return;
     try {
-      const res = await createEnrollmentApi({
+      const r = await createEnrollmentApi({
         student_id: studentId,
         section_id: managingSection.id,
       });
-      setEnrollments((prev) => [...prev, res.data]);
-      setSections((prev: Section[]) =>
-        prev.map((s: Section) =>
+      setEnrollments((p) => [...p, r.data]);
+      setSections((p: Section[]) =>
+        p.map((s: Section) =>
           s.id === managingSection.id
             ? { ...s, student_count: s.student_count + 1 }
             : s,
         ),
       );
-      toast.success("Student enrolled!");
+      toast.success("Enrolled!");
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || "Failed to enroll");
+      toast.error(e?.response?.data?.error || "Failed");
     }
   };
 
-  const handleUnenroll = async (enrollmentId: number, studentId: number) => {
-    if (!confirm("Remove this student from the section?")) return;
+  const handleUnenroll = async (enrollmentId: number) => {
+    if (!confirm("Remove student?")) return;
     try {
       await deleteEnrollmentApi(enrollmentId);
-      setEnrollments((prev) =>
-        prev.filter((e: Enrollment) => e.id !== enrollmentId),
-      );
-      setSections((prev: Section[]) =>
-        prev.map((s: Section) =>
+      setEnrollments((p) => p.filter((e: Enrollment) => e.id !== enrollmentId));
+      setSections((p: Section[]) =>
+        p.map((s: Section) =>
           s.id === managingSection?.id
             ? { ...s, student_count: Math.max(0, s.student_count - 1) }
             : s,
         ),
       );
-      toast.success("Student removed.");
+      toast.success("Removed.");
     } catch {
-      toast.error("Failed to remove student");
+      toast.error("Failed");
     }
   };
 
@@ -1177,32 +1394,29 @@ const SectionsPanel = ({
         s.student_id.toLowerCase().includes(studentSearch.toLowerCase())),
   );
 
-  // ── CSV helpers ───────────────────────────────────────────────────────────
-  const parseCsvIds = (raw: string): string[] =>
-    raw
+  const handleCsvPreview = () => {
+    const ids = csvText
       .split(/[\n,]+/)
       .map((s) => s.trim())
       .filter(Boolean);
-
-  const handleCsvPreview = () => {
-    const ids = parseCsvIds(csvText);
-    if (ids.length === 0) {
-      toast.error("Paste at least one student ID");
+    if (!ids.length) {
+      toast.error("Paste at least one ID");
       return;
     }
-    const preview = ids.map((id) => {
-      const student = allStudents.find((s: Student) => s.student_id === id);
-      if (!student) return { id, error: "Not found" };
-      if (enrolledIds.has(student.id))
-        return {
-          id,
-          found: student.id,
-          name: student.full_name,
-          error: "Already enrolled",
-        };
-      return { id, found: student.id, name: student.full_name };
-    });
-    setCsvPreview(preview);
+    setCsvPreview(
+      ids.map((id) => {
+        const s = allStudents.find((x: Student) => x.student_id === id);
+        if (!s) return { id, error: "Not found" };
+        if (enrolledIds.has(s.id))
+          return {
+            id,
+            found: s.id,
+            name: s.full_name,
+            error: "Already enrolled",
+          };
+        return { id, found: s.id, name: s.full_name };
+      }),
+    );
     setCsvParsed(true);
   };
 
@@ -1211,38 +1425,32 @@ const SectionsPanel = ({
     const toEnroll = csvPreview
       .filter((r) => r.found && !r.error)
       .map((r) => r.found as number);
-    if (toEnroll.length === 0) {
-      toast.error("No valid students to import");
+    if (!toEnroll.length) {
+      toast.error("No valid students");
       return;
     }
     setCsvImporting(true);
     try {
-      const res = await bulkEnrollApi({
+      const r = await bulkEnrollApi({
         section_id: managingSection.id,
         student_ids: toEnroll,
       });
-      const { enrolled } = res.data;
-      // Refresh enrollments list
-      const enrollRes = await getEnrollmentsApi({
-        section: managingSection.id,
-      });
-      setEnrollments(enrollRes.data);
-      setSections((prev: Section[]) =>
-        prev.map((s: Section) =>
+      const er = await getEnrollmentsApi({ section: managingSection.id });
+      setEnrollments(er.data);
+      setSections((p: Section[]) =>
+        p.map((s: Section) =>
           s.id === managingSection.id
-            ? { ...s, student_count: s.student_count + enrolled }
+            ? { ...s, student_count: s.student_count + r.data.enrolled }
             : s,
         ),
       );
-      toast.success(
-        `Imported ${enrolled} student${enrolled !== 1 ? "s" : ""}!`,
-      );
+      toast.success(`Imported ${r.data.enrolled} students!`);
       setCsvText("");
       setCsvPreview([]);
       setCsvParsed(false);
       setManageTab("search");
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || "Import failed");
+      toast.error(e?.response?.data?.error || "Failed");
     } finally {
       setCsvImporting(false);
     }
@@ -1276,7 +1484,8 @@ const SectionsPanel = ({
               <option value="">All Semesters</option>
               {semesters.map((s: Semester) => (
                 <option key={s.id} value={s.id}>
-                  {s.label} {s.is_current ? "(Current)" : ""}
+                  {s.label}
+                  {s.is_current ? " (Current)" : ""}
                 </option>
               ))}
             </select>
@@ -1325,8 +1534,7 @@ const SectionsPanel = ({
                     colSpan={6}
                     className="text-center py-12 text-muted-foreground"
                   >
-                    No sections found. Select a semester to filter or add a new
-                    section.
+                    No sections found.
                   </td>
                 </tr>
               )}
@@ -1376,24 +1584,20 @@ const SectionsPanel = ({
           <div className="space-y-4 pt-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Section Name *
-                </p>
+                <p className={labelCls}>Section Name *</p>
                 <input
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g. A, B, C"
-                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  placeholder="e.g. A, B"
+                  className={inputCls}
                 />
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Year *
-                </p>
+                <p className={labelCls}>Year *</p>
                 <select
                   value={form.year}
                   onChange={(e) => setForm({ ...form, year: e.target.value })}
-                  className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                  className={inputCls}
                 >
                   {years.map((y: number) => (
                     <option key={y} value={y}>
@@ -1404,15 +1608,13 @@ const SectionsPanel = ({
               </div>
             </div>
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Programme *
-              </p>
+              <p className={labelCls}>Programme *</p>
               <select
                 value={form.programme_id}
                 onChange={(e) =>
                   setForm({ ...form, programme_id: e.target.value })
                 }
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               >
                 <option value="">Select programme</option>
                 {programmes.map((p: Programme) => (
@@ -1423,20 +1625,19 @@ const SectionsPanel = ({
               </select>
             </div>
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Semester *
-              </p>
+              <p className={labelCls}>Semester *</p>
               <select
                 value={form.semester_id}
                 onChange={(e) =>
                   setForm({ ...form, semester_id: e.target.value })
                 }
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               >
                 <option value="">Select semester</option>
                 {semesters.map((s: Semester) => (
                   <option key={s.id} value={s.id}>
-                    {s.label} {s.is_current ? "(Current)" : ""}
+                    {s.label}
+                    {s.is_current ? " (Current)" : ""}
                   </option>
                 ))}
               </select>
@@ -1457,7 +1658,6 @@ const SectionsPanel = ({
         </DialogContent>
       </Dialog>
 
-      {/* Manage Students Dialog */}
       <Dialog open={manageOpen} onOpenChange={setManageOpen}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
@@ -1472,7 +1672,6 @@ const SectionsPanel = ({
             </div>
           ) : (
             <div className="space-y-5 pt-2">
-              {/* Enrolled list */}
               <div>
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                   Enrolled ({enrollments.length})
@@ -1497,7 +1696,7 @@ const SectionsPanel = ({
                           </p>
                         </div>
                         <button
-                          onClick={() => handleUnenroll(e.id, e.student)}
+                          onClick={() => handleUnenroll(e.id)}
                           className="text-xs text-destructive hover:underline px-2 py-1"
                         >
                           Remove
@@ -1507,46 +1706,31 @@ const SectionsPanel = ({
                   </div>
                 )}
               </div>
-
-              {/* Tab switcher */}
-              <div className="flex gap-1 border-b border-border pb-0">
-                <button
-                  onClick={() => setManageTab("search")}
-                  className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
-                    manageTab === "search"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  }`}
-                >
-                  Search & Add
-                </button>
-                <button
-                  onClick={() => setManageTab("csv")}
-                  className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
-                    manageTab === "csv"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  }`}
-                >
-                  Import by Student ID
-                </button>
+              <div className="flex gap-1 border-b border-border">
+                {(["search", "csv"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setManageTab(tab)}
+                    className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${manageTab === tab ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                  >
+                    {tab === "search" ? "Search & Add" : "Import by Student ID"}
+                  </button>
+                ))}
               </div>
-
-              {/* Search tab */}
               {manageTab === "search" && (
                 <div>
                   <input
-                    placeholder="Search by name or student ID..."
+                    placeholder="Search by name or ID..."
                     value={studentSearch}
                     onChange={(e) => setStudentSearch(e.target.value)}
-                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring mb-2"
+                    className={`${inputCls} mb-2`}
                   />
                   <div className="border border-border rounded-lg divide-y divide-border max-h-56 overflow-y-auto">
                     {filteredAvailable.length === 0 && (
                       <p className="text-sm text-muted-foreground italic px-4 py-3">
                         {studentSearch
-                          ? "No students match your search."
-                          : "All students are already enrolled or no students exist."}
+                          ? "No match."
+                          : "All enrolled or no students."}
                       </p>
                     )}
                     {filteredAvailable.map((s: Student) => (
@@ -1571,16 +1755,11 @@ const SectionsPanel = ({
                   </div>
                 </div>
               )}
-
-              {/* CSV import tab */}
               {manageTab === "csv" && (
                 <div className="space-y-3">
                   <p className="text-xs text-muted-foreground">
-                    Paste student IDs separated by commas or new lines (e.g.{" "}
-                    <code className="bg-muted px-1 rounded">
-                      STU001, STU002
-                    </code>
-                    ). Students must already exist in the system.
+                    Paste student IDs separated by commas or new lines. Students
+                    must already exist in the system.
                   </p>
                   <textarea
                     rows={5}
@@ -1590,10 +1769,9 @@ const SectionsPanel = ({
                       setCsvParsed(false);
                       setCsvPreview([]);
                     }}
-                    placeholder={"STU001\nSTU002\nSTU003"}
-                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring font-mono resize-none"
+                    placeholder={"STU001\nSTU002"}
+                    className={`${inputCls} font-mono resize-none`}
                   />
-
                   {!csvParsed ? (
                     <Button
                       size="sm"
@@ -1609,9 +1787,7 @@ const SectionsPanel = ({
                         {csvPreview.map((row, i) => (
                           <div
                             key={i}
-                            className={`flex items-center justify-between px-4 py-2 ${
-                              row.error ? "bg-destructive/5" : "bg-green-500/5"
-                            }`}
+                            className={`flex items-center justify-between px-4 py-2 ${row.error ? "bg-destructive/5" : "bg-green-500/5"}`}
                           >
                             <div>
                               <span className="font-mono font-medium">
@@ -1624,11 +1800,7 @@ const SectionsPanel = ({
                               )}
                             </div>
                             <span
-                              className={`text-xs px-2 py-0.5 rounded-full ${
-                                row.error
-                                  ? "bg-destructive/10 text-destructive"
-                                  : "bg-green-500/10 text-green-700 dark:text-green-400"
-                              }`}
+                              className={`text-xs px-2 py-0.5 rounded-full ${row.error ? "bg-destructive/10 text-destructive" : "bg-green-500/10 text-green-700"}`}
                             >
                               {row.error ?? "Ready"}
                             </span>
@@ -1637,8 +1809,8 @@ const SectionsPanel = ({
                       </div>
                       <div className="flex items-center gap-3">
                         <p className="text-xs text-muted-foreground flex-1">
-                          {csvPreview.filter((r) => !r.error).length} will be
-                          enrolled, {csvPreview.filter((r) => !!r.error).length}{" "}
+                          {csvPreview.filter((r) => !r.error).length} will
+                          enroll, {csvPreview.filter((r) => !!r.error).length}{" "}
                           skipped
                         </p>
                         <Button
@@ -1657,7 +1829,7 @@ const SectionsPanel = ({
                           onClick={handleCsvImport}
                           disabled={
                             csvImporting ||
-                            csvPreview.filter((r) => !r.error).length === 0
+                            !csvPreview.filter((r) => !r.error).length
                           }
                         >
                           {csvImporting ? "Importing..." : "Import"}
@@ -1675,7 +1847,7 @@ const SectionsPanel = ({
   );
 };
 
-// ─── Course Offerings Panel ───────────────────────────────────────────────────
+// ─── Course Offerings ─────────────────────────────────────────────────────────
 const OfferingsPanel = ({
   offerings,
   setOfferings,
@@ -1700,29 +1872,28 @@ const OfferingsPanel = ({
   const [editTeacher, setEditTeacher] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Filter sections by semester
   const filteredSections = sections.filter(
     (s: Section) => !filterSemester || String(s.semester) === filterSemester,
   );
 
   const handleAdd = async () => {
     if (!form.course_id || !form.section_id) {
-      toast.error("Course and section are required");
+      toast.error("Course and section required");
       return;
     }
     setSaving(true);
     try {
-      const res = await createOfferingApi({
+      const r = await createOfferingApi({
         course_id: parseInt(form.course_id),
         section_id: parseInt(form.section_id),
         teacher_id: form.teacher_id ? parseInt(form.teacher_id) : undefined,
       });
-      setOfferings((prev: Offering[]) => [...prev, res.data]);
-      toast.success("Course offering created!");
+      setOfferings((p: Offering[]) => [...p, r.data]);
+      toast.success("Offering created!");
       setOpen(false);
       setForm({ course_id: "", section_id: "", teacher_id: "" });
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || "Failed to create offering");
+      toast.error(e?.response?.data?.error || "Failed");
     } finally {
       setSaving(false);
     }
@@ -1732,31 +1903,29 @@ const OfferingsPanel = ({
     if (!editing) return;
     setSaving(true);
     try {
-      const res = await updateOfferingApi(editing.id, {
+      const r = await updateOfferingApi(editing.id, {
         teacher_id: editTeacher ? parseInt(editTeacher) : undefined,
       });
-      setOfferings((prev: Offering[]) =>
-        prev.map((o: Offering) => (o.id === editing.id ? res.data : o)),
+      setOfferings((p: Offering[]) =>
+        p.map((o: Offering) => (o.id === editing.id ? r.data : o)),
       );
       toast.success("Teacher updated!");
       setEditOpen(false);
     } catch {
-      toast.error("Failed to update teacher");
+      toast.error("Failed");
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Remove this course offering?")) return;
+    if (!confirm("Remove this offering?")) return;
     try {
       await deleteOfferingApi(id);
-      setOfferings((prev: Offering[]) =>
-        prev.filter((o: Offering) => o.id !== id),
-      );
-      toast.success("Offering removed.");
+      setOfferings((p: Offering[]) => p.filter((o: Offering) => o.id !== id));
+      toast.success("Removed.");
     } catch {
-      toast.error("Failed to remove offering");
+      toast.error("Failed");
     }
   };
 
@@ -1770,8 +1939,7 @@ const OfferingsPanel = ({
                 Course Offerings
               </CardTitle>
               <p className="text-xs text-muted-foreground mt-1">
-                Assign course templates to sections and teachers for each
-                semester
+                Assign courses to sections and teachers for each semester
               </p>
             </div>
             <Button
@@ -1791,7 +1959,8 @@ const OfferingsPanel = ({
               <option value="">All Semesters</option>
               {semesters.map((s: Semester) => (
                 <option key={s.id} value={s.id}>
-                  {s.label} {s.is_current ? "(Current)" : ""}
+                  {s.label}
+                  {s.is_current ? " (Current)" : ""}
                 </option>
               ))}
             </select>
@@ -1840,7 +2009,7 @@ const OfferingsPanel = ({
                     colSpan={6}
                     className="text-center py-12 text-muted-foreground"
                   >
-                    No course offerings found. Add sections and courses first.
+                    No course offerings found.
                   </td>
                 </tr>
               )}
@@ -1865,7 +2034,7 @@ const OfferingsPanel = ({
                       </span>
                     )}
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
                       <button
                         onClick={() => {
@@ -1892,7 +2061,6 @@ const OfferingsPanel = ({
         </CardContent>
       </Card>
 
-      {/* Add Offering Modal */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -1902,15 +2070,13 @@ const OfferingsPanel = ({
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Course *
-              </p>
+              <p className={labelCls}>Course *</p>
               <select
                 value={form.course_id}
                 onChange={(e) =>
                   setForm({ ...form, course_id: e.target.value })
                 }
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               >
                 <option value="">Select course</option>
                 {courses.map((c: Course) => (
@@ -1921,15 +2087,13 @@ const OfferingsPanel = ({
               </select>
             </div>
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Section *
-              </p>
+              <p className={labelCls}>Section *</p>
               <select
                 value={form.section_id}
                 onChange={(e) =>
                   setForm({ ...form, section_id: e.target.value })
                 }
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               >
                 <option value="">Select section</option>
                 {filteredSections.map((s: Section) => (
@@ -1940,15 +2104,13 @@ const OfferingsPanel = ({
               </select>
             </div>
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Teacher
-              </p>
+              <p className={labelCls}>Teacher</p>
               <select
                 value={form.teacher_id}
                 onChange={(e) =>
                   setForm({ ...form, teacher_id: e.target.value })
                 }
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               >
                 <option value="">Assign later</option>
                 {teachers.map((t: User) => (
@@ -1974,7 +2136,6 @@ const OfferingsPanel = ({
         </DialogContent>
       </Dialog>
 
-      {/* Edit Teacher Modal */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -1985,13 +2146,11 @@ const OfferingsPanel = ({
               {editing?.course_name} — Sec {editing?.section_name}
             </p>
             <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Teacher
-              </p>
+              <p className={labelCls}>Teacher</p>
               <select
                 value={editTeacher}
                 onChange={(e) => setEditTeacher(e.target.value)}
-                className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background outline-none focus:ring-2 focus:ring-ring"
+                className={inputCls}
               >
                 <option value="">Unassigned</option>
                 {teachers.map((t: User) => (

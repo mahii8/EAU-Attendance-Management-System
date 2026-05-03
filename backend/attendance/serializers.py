@@ -1,20 +1,22 @@
 from rest_framework import serializers
 from .models import (
-    User, Programme, Course, AcademicYear, Semester,
+    User, Programme, Department, Course, AcademicYear, Semester,
     Section, Student, Enrollment, CourseOffering,
-    AttendanceRecord, Notification, SystemSettings, School
+    AttendanceRecord, Notification, SystemSettings
 )
 
 
-class SchoolSerializer(serializers.ModelSerializer):
-    programme_count = serializers.SerializerMethodField()
+class DepartmentSerializer(serializers.ModelSerializer):
+    programme_name = serializers.CharField(source='programme.name', read_only=True)
+    course_count = serializers.SerializerMethodField()
 
     class Meta:
-        model = School
-        fields = ['id', 'name', 'code', 'is_active', 'programme_count']
+        model = Department
+        fields = ['id', 'name', 'code', 'programme', 'programme_name',
+                  'is_active', 'course_count']
 
-    def get_programme_count(self, obj):
-        return obj.programmes.filter(is_active=True).count()
+    def get_course_count(self, obj):
+        return obj.courses.filter(is_active=True).count()
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -22,32 +24,30 @@ class UserSerializer(serializers.ModelSerializer):
     managed_programme_name = serializers.CharField(
         source='managed_programme.name', read_only=True
     )
-    managed_school_name = serializers.CharField(
-        source='managed_school.name', read_only=True
+    managed_department_name = serializers.CharField(
+        source='managed_department.name', read_only=True
     )
+    # For dept_head, expose which programme their department belongs to
+    managed_department_programme = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id', 'username', 'staff_id', 'email',
             'first_name', 'last_name', 'full_name', 'role',
-            'is_staff', 'is_superuser',
             'managed_programme', 'managed_programme_name',
-            'managed_school', 'managed_school_name',
+            'managed_department', 'managed_department_name',
+            'managed_department_programme',
         ]
 
     def get_full_name(self, obj):
         return obj.get_full_name()
 
-    def to_representation(self, instance):
-        """
-        Frontend routing uses `role` for portal selection.
-        Treat Django superusers as elevated (admin) regardless of the custom role field.
-        """
-        data = super().to_representation(instance)
-        if instance.is_superuser:
-            data['role'] = 'admin'
-        return data
+    def get_managed_department_programme(self, obj):
+        """Returns the programme_id of the dept_head's department — used for scoping."""
+        if obj.role == 'dept_head' and obj.managed_department:
+            return obj.managed_department.programme_id
+        return None
 
 
 class LoginSerializer(serializers.Serializer):
@@ -58,13 +58,13 @@ class LoginSerializer(serializers.Serializer):
 class ProgrammeSerializer(serializers.ModelSerializer):
     student_count = serializers.SerializerMethodField()
     course_count = serializers.SerializerMethodField()
-    school_name = serializers.CharField(source='school.name', read_only=True)
+    department_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Programme
         fields = [
             'id', 'name', 'code', 'duration_years', 'is_active',
-            'school', 'school_name', 'student_count', 'course_count'
+            'student_count', 'course_count', 'department_count'
         ]
 
     def get_student_count(self, obj):
@@ -73,15 +73,20 @@ class ProgrammeSerializer(serializers.ModelSerializer):
     def get_course_count(self, obj):
         return obj.courses.filter(is_active=True).count()
 
+    def get_department_count(self, obj):
+        return obj.departments.filter(is_active=True).count()
+
 
 class CourseSerializer(serializers.ModelSerializer):
     programme_name = serializers.CharField(source='programme.name', read_only=True)
+    department_name = serializers.CharField(source='department.name', read_only=True)
     minimum_required_hours = serializers.ReadOnlyField()
 
     class Meta:
         model = Course
         fields = [
             'id', 'name', 'code', 'programme', 'programme_name',
+            'department', 'department_name',
             'year', 'total_credit_hours', 'minimum_required_hours',
             'minimum_attendance_percent', 'is_active'
         ]
@@ -153,17 +158,19 @@ class StudentSerializer(serializers.ModelSerializer):
     def get_current_section(self, obj):
         enrollment = obj.enrollments.filter(
             status='active'
-        ).select_related('section__programme', 'section__semester__academic_year').order_by(
+        ).select_related(
+            'section__programme', 'section__semester__academic_year'
+        ).order_by(
             '-section__semester__academic_year__start_date',
             '-section__semester__number'
         ).first()
         if enrollment:
             return {
-                'section_id': enrollment.section.id,
+                'section_id':   enrollment.section.id,
                 'section_name': enrollment.section.name,
-                'year': enrollment.section.year,
-                'programme': enrollment.section.programme.name,
-                'semester': str(enrollment.section.semester),
+                'year':         enrollment.section.year,
+                'programme':    enrollment.section.programme.name,
+                'semester':     str(enrollment.section.semester),
             }
         return None
 
@@ -199,6 +206,9 @@ class CourseOfferingSerializer(serializers.ModelSerializer):
     section_name = serializers.CharField(source='section.name', read_only=True)
     section_year = serializers.IntegerField(source='section.year', read_only=True)
     programme_name = serializers.CharField(source='section.programme.name', read_only=True)
+    department_name = serializers.CharField(
+        source='course.department.name', read_only=True
+    )
     teacher_name = serializers.SerializerMethodField()
     semester_label = serializers.SerializerMethodField()
 
@@ -207,7 +217,8 @@ class CourseOfferingSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'course', 'course_name', 'course_code',
             'total_credit_hours', 'minimum_required_hours',
-            'section', 'section_name', 'section_year', 'programme_name',
+            'section', 'section_name', 'section_year',
+            'programme_name', 'department_name',
             'teacher', 'teacher_name', 'semester_label'
         ]
 
@@ -258,10 +269,7 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = SystemSettings
         fields = [
-            'email_alerts_enabled',
-            'telegram_alerts_enabled',
-            'threshold_warnings_enabled',
-            'weekly_reports_enabled',
-            'at_risk_threshold',
-            'warning_threshold',
+            'email_alerts_enabled', 'telegram_alerts_enabled',
+            'threshold_warnings_enabled', 'weekly_reports_enabled',
+            'at_risk_threshold', 'warning_threshold',
         ]
