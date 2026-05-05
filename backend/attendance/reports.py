@@ -62,17 +62,17 @@ def get_course_summary(course, start_date=None, end_date=None):
         minimum = Decimal(str(course.minimum_required_hours))
 
         total_recorded = attended_hours + missed_hours
-        percentage = round(
-            float(attended_hours / total_recorded * 100)
-            if total_recorded > 0 else 100.0, 1
-        )
-
-        if percentage >= 90:
-            status = 'Safe'
-        elif percentage >= 85:
-            status = 'Warning'
+        if total_recorded > 0:
+            percentage = round(float(attended_hours / total_recorded * 100), 1)
+            if percentage >= 90:
+                status = 'Safe'
+            elif percentage >= 85:
+                status = 'Warning'
+            else:
+                status = 'At Risk'
         else:
-            status = 'At Risk'
+            percentage = 0.0
+            status = 'No Records'
 
         summary.append({
             'student_id': student.student_id,
@@ -395,8 +395,13 @@ def get_course_offering_summary(offering, start_date=None, end_date=None):
         attended_hours = AttendanceRecord.objects.filter(**filters).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
         missed_hours = AttendanceRecord.objects.filter(**missed_filters).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
         total_recorded = attended_hours + missed_hours
-        percentage = round(float(attended_hours / total_recorded * 100) if total_recorded > 0 else 100.0, 1)
-        status = 'Safe' if percentage >= 90 else ('Warning' if percentage >= 85 else 'At Risk')
+        
+        if total_recorded > 0:
+            percentage = round(float(attended_hours / total_recorded * 100), 1)
+            status = 'Safe' if percentage >= 90 else ('Warning' if percentage >= 85 else 'At Risk')
+        else:
+            percentage = 0.0
+            status = 'No Records'
 
         summary.append({
             'student_id': student.student_id,

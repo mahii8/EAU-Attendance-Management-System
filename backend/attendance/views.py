@@ -962,13 +962,17 @@ class CourseOfferingSummaryView(APIView):
                 status__in=['absent', 'excused']
             ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
             total    = attended + missed
-            pct      = round(float(attended / total * 100) if total > 0 else 100.0, 1)
-            if pct < float(at_risk_thr):
-                stu_status = 'at_risk'
-            elif pct < float(warning_thr):
-                stu_status = 'warning'
+            if total > 0:
+                pct = round(float(attended / total * 100), 1)
+                if pct < float(at_risk_thr):
+                    stu_status = 'at_risk'
+                elif pct < float(warning_thr):
+                    stu_status = 'warning'
+                else:
+                    stu_status = 'safe'
             else:
-                stu_status = 'safe'
+                pct = 0.0
+                stu_status = 'no_records'
             summary.append({
                 'student':                StudentSerializer(student).data,
                 'attended_hours':         float(attended),
@@ -1450,19 +1454,36 @@ class CourseOfferingReportView(APIView):
             offering = CourseOffering.objects.get(id=offering_id)
         except CourseOffering.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-        report_format = request.query_params.get('format', 'pdf')
+        report_format = request.query_params.get('report_format', 'pdf')
         report_type   = request.query_params.get('type', 'full')
+        
+        start_date_str = request.query_params.get('start_date')
+        end_date_str   = request.query_params.get('end_date')
+
         try:
+            start_date = None
+            end_date   = None
+            
             if report_type == 'weekly':
                 end_date   = date.today()
                 start_date = end_date - timedelta(days=7)
-                summary    = get_course_offering_summary(offering, start_date, end_date)
-                title      = "Weekly Attendance Report"
-                filename   = f"{offering.course.name}_weekly_{end_date}"
+                title      = f"Weekly Report ({start_date} to {end_date})"
+                filename   = f"{offering.course.name}_weekly_{start_date}_to_{end_date}"
+            elif start_date_str and end_date_str:
+                try:
+                    start_date = date.fromisoformat(start_date_str)
+                    end_date   = date.fromisoformat(end_date_str)
+                    title      = f"Range Report ({start_date} to {end_date})"
+                    filename   = f"{offering.course.name}_range_{start_date}_{end_date}"
+                except ValueError:
+                    return Response({'error': 'Invalid date format. Use YYYY-MM-DD.'}, 
+                                    status=status.HTTP_400_BAD_REQUEST)
             else:
-                summary  = get_course_offering_summary(offering)
-                title    = "Full Attendance Report"
-                filename = f"{offering.course.name}_full_report"
+                title    = f"Full Report - {offering.section.semester}"
+                filename = f"{offering.course.name}_full_semester"
+            
+            summary = get_course_offering_summary(offering, start_date, end_date)
+            
             if report_format == 'csv':
                 return generate_course_csv(offering.course, summary, f"{filename}.csv")
             buffer = generate_course_pdf(offering.course, summary, title)
@@ -1485,7 +1506,7 @@ class StudentReportView(APIView):
             student = Student.objects.get(id=student_id)
         except Student.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-        report_format = request.query_params.get('format', 'pdf')
+        report_format = request.query_params.get('report_format', 'pdf')
         semester_id   = request.query_params.get('semester')
         try:
             records_qs = AttendanceRecord.objects.filter(student=student)
@@ -1505,9 +1526,8 @@ class StudentReportView(APIView):
                     course_offering=offering,
                     status__in=['absent', 'excused']
                 ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-                total    = offering.course.total_credit_hours
-                pct      = round(
-                    float(attended) / float(total) * 100 if total > 0 else 0, 1)
+                conducted = attended + missed
+                pct = round(float(attended / conducted * 100) if conducted > 0 else 0.0, 1)
                 course_summaries.append({
                     'course_name':      offering.course.name,
                     'attended_hours':   float(attended),

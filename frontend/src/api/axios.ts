@@ -297,12 +297,17 @@ export const downloadReportApi = async (
   type: "offering" | "student",
   id: number,
   format: "pdf" | "csv",
-  reportType: "full" | "weekly" = "full",
+  reportType: "full" | "weekly" | "range" = "full",
+  startDate?: string,
+  endDate?: string,
 ) => {
-  const url =
+  let url =
     type === "offering"
-      ? `/reports/offering/${id}/?format=${format}&type=${reportType}`
-      : `/reports/student/${id}/?format=${format}`;
+      ? `/reports/offering/${id}/?report_format=${format}&type=${reportType}`
+      : `/reports/student/${id}/?report_format=${format}`;
+
+  if (startDate) url += `&start_date=${startDate}`;
+  if (endDate) url += `&end_date=${endDate}`;
 
   const response = await api.get(url, {
     responseType: "blob",

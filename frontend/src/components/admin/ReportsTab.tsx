@@ -51,6 +51,8 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [offerings, setOfferings] = useState<Offering[]>([]);
   const [loadingOfferings, setLoadingOfferings] = useState(false);
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
 
   // Load offerings for current semester on mount
   useEffect(() => {
@@ -87,6 +89,8 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
         parseInt(selectedOffering),
         format,
         type,
+        type === "range" ? startDate : undefined,
+        type === "range" ? endDate : undefined,
       );
       toast.success("Report downloaded!");
     } catch (err: any) {
@@ -303,6 +307,55 @@ const ReportsTab = ({ courses }: ReportsTabProps) => {
                   </div>
                   <Download className="w-4 h-4 ml-auto text-muted-foreground group-hover:text-primary" />
                 </button>
+
+                <div className="flex flex-col gap-3 p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all group col-span-1 sm:col-span-3">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-indigo-500/10 group-hover:bg-indigo-500/20 transition-colors">
+                      <FileText className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div className="text-left">
+                      <p className="font-medium text-sm">Custom Range Report</p>
+                      <p className="text-xs text-muted-foreground">PDF format</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex gap-3 mt-2">
+                    <div className="flex-1 space-y-1">
+                      <label className="text-[10px] font-bold text-muted-foreground uppercase">From</label>
+                      <input 
+                        type="date" 
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="w-full bg-background border border-border rounded-md px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary outline-none"
+                      />
+                    </div>
+                    <div className="flex-1 space-y-1">
+                      <label className="text-[10px] font-bold text-muted-foreground uppercase">To</label>
+                      <input 
+                        type="date" 
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        className="w-full bg-background border border-border rounded-md px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary outline-none"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          if (!startDate || !endDate) {
+                            toast.error("Select both start and end dates");
+                            return;
+                          }
+                          handleOfferingReport("pdf", "range" as any);
+                        }}
+                        disabled={!!downloading || !startDate || !endDate}
+                        className="h-[34px]"
+                      >
+                        <Download className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
