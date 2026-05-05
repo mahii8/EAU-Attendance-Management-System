@@ -84,8 +84,9 @@ export default function ParentDashboard() {
     (r) => r.status === "present" || r.status === "late",
   ).length;
   const overallPct =
-    totalRecords > 0 ? Math.round((presentCount / totalRecords) * 100) : 100;
-  const isAtRisk = overallPct < 85;
+    totalRecords > 0 ? Math.round((presentCount / totalRecords) * 100) : 0;
+  const isAtRisk = totalRecords > 0 && overallPct < 85;
+  const statusText = totalRecords > 0 ? (isAtRisk ? "At Risk" : "Good") : "No Data";
 
   // Course breakdown
   const courseBreakdown = offerings.map((o) => {
@@ -189,7 +190,7 @@ export default function ParentDashboard() {
                 <p
                   className={`text-3xl font-bold ${isAtRisk ? "text-destructive" : ""}`}
                 >
-                  {isAtRisk ? "At Risk" : "Good"}
+                  {statusText}
                 </p>
                 <p className="text-sm font-medium text-muted-foreground">
                   Status

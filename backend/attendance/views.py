@@ -1456,30 +1456,17 @@ class CourseOfferingReportView(APIView):
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         report_format = request.query_params.get('report_format', 'pdf')
         report_type   = request.query_params.get('type', 'full')
-        
-        start_date_str = request.query_params.get('start_date')
-        end_date_str   = request.query_params.get('end_date')
 
         try:
-            start_date = None
-            end_date   = None
-            
             if report_type == 'weekly':
                 end_date   = date.today()
                 start_date = end_date - timedelta(days=7)
                 title      = f"Weekly Report ({start_date} to {end_date})"
                 filename   = f"{offering.course.name}_weekly_{start_date}_to_{end_date}"
-            elif start_date_str and end_date_str:
-                try:
-                    start_date = date.fromisoformat(start_date_str)
-                    end_date   = date.fromisoformat(end_date_str)
-                    title      = f"Range Report ({start_date} to {end_date})"
-                    filename   = f"{offering.course.name}_range_{start_date}_{end_date}"
-                except ValueError:
-                    return Response({'error': 'Invalid date format. Use YYYY-MM-DD.'}, 
-                                    status=status.HTTP_400_BAD_REQUEST)
             else:
-                title    = f"Full Report - {offering.section.semester}"
+                start_date = None
+                end_date   = None
+                title      = f"Full Report - {offering.section.semester}"
                 filename = f"{offering.course.name}_full_semester"
             
             summary = get_course_offering_summary(offering, start_date, end_date)
