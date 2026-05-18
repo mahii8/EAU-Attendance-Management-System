@@ -3,6 +3,7 @@ import io
 from decimal import Decimal
 from datetime import date, timedelta
 import datetime
+from collections import defaultdict
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -11,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
-from django.db.models import Sum, Q
+from django.db.models import Sum, Q, Avg
 from django.http import HttpResponse
 
 from .models import (
@@ -30,7 +31,10 @@ from .serializers import (
 from .utils import send_absence_alert, send_threshold_warning
 from .reports import (
     get_course_offering_summary, generate_course_pdf,
-    generate_course_csv, generate_student_pdf, generate_student_csv
+    generate_course_csv, generate_student_pdf, generate_student_csv,
+    get_offering_student_report_data, build_offering_report_aggregates,
+    generate_offering_filtered_csv,
+    generate_summary_overview_csv, generate_summary_overview_pdf,
 )
 
 
@@ -136,6 +140,235 @@ def notify_elevated(notification_type, message, programme=None):
             message=message,
             programme=programme,
         )
+
+
+def parse_report_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def build_summary_payload(user, params):
+    semester_id = params.get('semester')
+    programme_id = params.get('programme')
+    department_id = params.get('department')
+    teacher_id = params.get('teacher')
+    start_date = parse_report_date(params.get('start_date'))
+    end_date = parse_report_date(params.get('end_date'))
+
+    current_sem = None
+    if semester_id:
+        current_sem = Semester.objects.filter(id=semester_id).first()
+    else:
+        current_sem = Semester.objects.filter(is_current=True).first()
+
+    offerings = CourseOffering.objects.select_related(
+        'course__department',
+        'section__programme',
+        'section__semester',
+        'teacher',
+    ).all()
+    offerings = apply_programme_scope(offerings, user, 'section__programme_id')
+    if current_sem:
+        offerings = offerings.filter(section__semester=current_sem)
+    if programme_id:
+        offerings = offerings.filter(section__programme_id=programme_id)
+    if department_id:
+        offerings = offerings.filter(course__department_id=department_id)
+    if teacher_id:
+        offerings = offerings.filter(teacher_id=teacher_id)
+
+    settings = SystemSettings.get()
+    at_risk_thr = float(settings.at_risk_threshold)
+    warning_thr = float(settings.warning_threshold)
+
+    if start_date and end_date and end_date >= start_date:
+        period_days = (end_date - start_date).days + 1
+        prev_end = start_date - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=period_days - 1)
+    else:
+        prev_start = None
+        prev_end = None
+
+    offering_rows = []
+    all_student_ids = set()
+    risk_totals = {'safe': 0, 'warning': 0, 'at_risk': 0}
+    trend_map = defaultdict(list)
+
+    for offering in offerings:
+        enrollments = Enrollment.objects.filter(
+            section=offering.section,
+            status='active',
+        ).select_related('student')
+        students = [e.student for e in enrollments]
+        if not students:
+            continue
+
+        student_pcts = []
+        at_risk_count = 0
+        warning_count = 0
+        for student in students:
+            all_student_ids.add(student.id)
+            records = AttendanceRecord.objects.filter(
+                student=student,
+                course_offering=offering,
+            )
+            if start_date:
+                records = records.filter(date__gte=start_date)
+            if end_date:
+                records = records.filter(date__lte=end_date)
+
+            present = records.filter(status='present').aggregate(
+                total=Sum('hours_attended')
+            )['total'] or Decimal('0')
+            late = records.filter(status='late').aggregate(
+                total=Sum('hours_attended')
+            )['total'] or Decimal('0')
+            missed_qs = records.filter(status__in=['absent', 'excused'])
+            missed = missed_qs.aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+            if missed_qs.exists() and missed == 0:
+                fallback = records.filter(
+                    status__in=['present', 'late'],
+                    hours_attended__gt=0,
+                ).aggregate(avg=Avg('hours_attended'))['avg'] or Decimal('1.0')
+                missed = fallback * Decimal(missed_qs.count())
+            attended = present + late
+            total = attended + missed
+            earned = present + (late * Decimal('0.5'))
+            pct = round(float(earned / total * 100) if total > 0 else 0.0, 1)
+            student_pcts.append(pct)
+
+            if pct < at_risk_thr:
+                at_risk_count += 1
+                risk_totals['at_risk'] += 1
+            elif pct < warning_thr:
+                warning_count += 1
+                risk_totals['warning'] += 1
+            else:
+                risk_totals['safe'] += 1
+
+        avg_pct = round(sum(student_pcts) / len(student_pcts), 1) if student_pcts else 0.0
+
+        prev_avg_pct = None
+        if prev_start and prev_end:
+            prev_pcts = []
+            for student in students:
+                prev_records = AttendanceRecord.objects.filter(
+                    student=student,
+                    course_offering=offering,
+                    date__gte=prev_start,
+                    date__lte=prev_end,
+                )
+                prev_present = prev_records.filter(status='present').aggregate(
+                    total=Sum('hours_attended')
+                )['total'] or Decimal('0')
+                prev_late = prev_records.filter(status='late').aggregate(
+                    total=Sum('hours_attended')
+                )['total'] or Decimal('0')
+                prev_missed_qs = prev_records.filter(status__in=['absent', 'excused'])
+                prev_miss = prev_missed_qs.aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+                if prev_missed_qs.exists() and prev_miss == 0:
+                    fallback = prev_records.filter(
+                        status__in=['present', 'late'],
+                        hours_attended__gt=0,
+                    ).aggregate(avg=Avg('hours_attended'))['avg'] or Decimal('1.0')
+                    prev_miss = fallback * Decimal(prev_missed_qs.count())
+                prev_att = prev_present + prev_late
+                prev_total = prev_att + prev_miss
+                prev_earned = prev_present + (prev_late * Decimal('0.5'))
+                prev_pct = round(
+                    float(prev_earned / prev_total * 100) if prev_total > 0 else 0.0,
+                    1,
+                )
+                prev_pcts.append(prev_pct)
+            prev_avg_pct = round(sum(prev_pcts) / len(prev_pcts), 1) if prev_pcts else None
+
+        trend_delta = round(avg_pct - prev_avg_pct, 1) if prev_avg_pct is not None else 0.0
+        trend_label = (
+            "up" if trend_delta > 0 else "down" if trend_delta < 0 else "flat"
+        )
+
+        all_records = AttendanceRecord.objects.filter(course_offering=offering)
+        if start_date:
+            all_records = all_records.filter(date__gte=start_date)
+        if end_date:
+            all_records = all_records.filter(date__lte=end_date)
+        for rec in all_records.values('date', 'status', 'hours_attended'):
+            week = rec['date'] - datetime.timedelta(days=rec['date'].weekday())
+            trend_map[week].append(rec)
+
+        offering_rows.append({
+            'offering_id': offering.id,
+            'offering_label': f"{offering.course.name} — Sec {offering.section.name} Y{offering.section.year}",
+            'programme_name': offering.section.programme.name,
+            'department_name': offering.course.department.name if offering.course.department else '—',
+            'student_count': len(students),
+            'average_attendance': avg_pct,
+            'at_risk_count': at_risk_count,
+            'warning_count': warning_count,
+            'trend_delta': trend_delta,
+            'trend': trend_label,
+        })
+
+    offering_rows.sort(key=lambda x: x['average_attendance'])
+    bottom_five = offering_rows[:5]
+    top_five = list(reversed(offering_rows[-5:])) if offering_rows else []
+
+    attendance_trend = []
+    for week_start in sorted(trend_map.keys()):
+        recs = trend_map[week_start]
+        present = sum(float(r['hours_attended']) for r in recs if r['status'] == 'present')
+        late = sum(float(r['hours_attended']) for r in recs if r['status'] == 'late')
+        attended = present + late
+        missed_raw = [float(r['hours_attended']) for r in recs if r['status'] in ('absent', 'excused')]
+        missed = sum(missed_raw)
+        if missed == 0 and missed_raw:
+            attended_vals = [float(r['hours_attended']) for r in recs if r['status'] in ('present', 'late') and float(r['hours_attended']) > 0]
+            fallback = (sum(attended_vals) / len(attended_vals)) if attended_vals else 1.0
+            missed = fallback * len(missed_raw)
+        total = attended + missed
+        earned = present + (late * 0.5)
+        avg = round((earned / total * 100) if total > 0 else 0.0, 1)
+        attendance_trend.append({
+            'period': str(week_start),
+            'average_attendance': avg,
+        })
+
+    avg_all = round(
+        sum(r['average_attendance'] for r in offering_rows) / len(offering_rows),
+        1,
+    ) if offering_rows else 0.0
+    worst = offering_rows[0] if offering_rows else None
+
+    return {
+        'filters': {
+            'semester': current_sem.id if current_sem else None,
+            'programme': int(programme_id) if programme_id else None,
+            'department': int(department_id) if department_id else None,
+            'teacher': int(teacher_id) if teacher_id else None,
+            'start_date': str(start_date) if start_date else None,
+            'end_date': str(end_date) if end_date else None,
+        },
+        'kpis': {
+            'total_offerings': len(offering_rows),
+            'total_students': len(all_student_ids),
+            'overall_average_attendance': avg_all,
+            'total_at_risk_students': risk_totals['at_risk'],
+            'worst_offering_name': worst['offering_label'] if worst else 'N/A',
+        },
+        'risk_distribution': {
+            'Safe': risk_totals['safe'],
+            'Warning': risk_totals['warning'],
+            'At Risk': risk_totals['at_risk'],
+        },
+        'attendance_trend': attendance_trend,
+        'top_offerings': top_five,
+        'bottom_offerings': bottom_five,
+        'offering_analytics': offering_rows,
+    }
 
 
 # ─────────────────────────────────────────
@@ -945,42 +1178,56 @@ class CourseOfferingSummaryView(APIView):
             offering = CourseOffering.objects.get(id=offering_id)
         except CourseOffering.DoesNotExist:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-        settings       = SystemSettings.get()
-        at_risk_thr    = settings.at_risk_threshold
-        warning_thr    = settings.warning_threshold
-        enrollments    = Enrollment.objects.filter(
-            section=offering.section, status='active').select_related('student')
+        settings = SystemSettings.get()
+        report_type = request.query_params.get('type', 'full')
+        student_id = request.query_params.get('student')
+        start_date = parse_report_date(request.query_params.get('start_date'))
+        end_date = parse_report_date(request.query_params.get('end_date'))
+        if report_type == 'weekly' and not start_date and not end_date:
+            end_date = date.today()
+            start_date = end_date - timedelta(days=7)
+
+        rows = get_offering_student_report_data(
+            offering,
+            start_date=start_date,
+            end_date=end_date,
+            student_id=int(student_id) if student_id else None,
+            warning_threshold=float(settings.warning_threshold),
+            at_risk_threshold=float(settings.at_risk_threshold),
+        )
+        student_ids = [row['student_pk'] for row in rows]
+        student_map = {
+            s.id: StudentSerializer(s).data
+            for s in Student.objects.filter(id__in=student_ids)
+        }
         summary = []
-        for enrollment in enrollments:
-            student  = enrollment.student
-            records  = AttendanceRecord.objects.filter(
-                student=student, course_offering=offering)
-            attended = records.filter(
-                status__in=['present', 'late']
-            ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-            missed   = records.filter(
-                status__in=['absent', 'excused']
-            ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-            total    = attended + missed
-            pct      = round(float(attended / total * 100) if total > 0 else 100.0, 1)
-            if pct < float(at_risk_thr):
-                stu_status = 'at_risk'
-            elif pct < float(warning_thr):
-                stu_status = 'warning'
-            else:
-                stu_status = 'safe'
+        for row in rows:
+            status_slug = (
+                'safe' if row['status'] == 'Safe'
+                else 'warning' if row['status'] == 'Warning'
+                else 'at_risk'
+            )
             summary.append({
-                'student':                StudentSerializer(student).data,
-                'attended_hours':         float(attended),
-                'missed_hours':           float(missed),
-                'total_hours':            float(offering.course.total_credit_hours),
-                'attendance_percentage':  pct,
-                'minimum_required_hours': float(offering.course.minimum_required_hours),
-                'status':                 stu_status,
+                'student': student_map.get(row['student_pk'], {}),
+                'attended_hours': row['attended_hours'],
+                'missed_hours': row['missed_hours'],
+                'total_hours': row['total_hours'],
+                'attendance_percentage': row['percentage'],
+                'minimum_required_hours': row['minimum_required'],
+                'status': status_slug,
             })
+        aggregates = build_offering_report_aggregates(rows)
         return Response({
             'offering': CourseOfferingSerializer(offering).data,
-            'summary':  summary
+            'summary':  summary,
+            'rows': rows,
+            'aggregates': aggregates,
+            'filters': {
+                'type': report_type,
+                'student': int(student_id) if student_id else None,
+                'start_date': str(start_date) if start_date else None,
+                'end_date': str(end_date) if end_date else None,
+            },
         })
 
 
@@ -1071,9 +1318,9 @@ class AttendanceSubmitView(APIView):
                 date=data['date'], session_type=data['session_type'],
                 defaults={
                     'status':        status_val,
-                    'hours_attended': (data['session_hours']
-                                       if status_val in ['present', 'late']
-                                       else Decimal('0')),
+                    # Use session hours for all statuses so missed attendance
+                    # can be measured accurately in reports and analytics.
+                    'hours_attended': data['session_hours'],
                     'recorded_by':   teacher,
                 }
             )
@@ -1452,19 +1699,50 @@ class CourseOfferingReportView(APIView):
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         report_format = request.query_params.get('format', 'pdf')
         report_type   = request.query_params.get('type', 'full')
+        student_id = request.query_params.get('student')
+        student = Student.objects.filter(id=student_id).first() if student_id else None
+        start_date = parse_report_date(request.query_params.get('start_date'))
+        end_date = parse_report_date(request.query_params.get('end_date'))
         try:
-            if report_type == 'weekly':
-                end_date   = date.today()
+            if report_type == 'weekly' and not start_date and not end_date:
+                end_date = date.today()
                 start_date = end_date - timedelta(days=7)
-                summary    = get_course_offering_summary(offering, start_date, end_date)
-                title      = "Weekly Attendance Report"
-                filename   = f"{offering.course.name}_weekly_{end_date}"
+
+            settings = SystemSettings.get()
+            summary = get_offering_student_report_data(
+                offering,
+                start_date=start_date,
+                end_date=end_date,
+                student_id=int(student_id) if student_id else None,
+                warning_threshold=float(settings.warning_threshold),
+                at_risk_threshold=float(settings.at_risk_threshold),
+            )
+            aggregates = build_offering_report_aggregates(summary)
+            if report_type == 'weekly':
+                title = "Weekly Attendance Report"
+                filename = f"{offering.course.name}_weekly_{end_date or date.today()}"
+            elif report_type == 'custom':
+                title = "Filtered Attendance Report"
+                filename = f"{offering.course.name}_filtered_report"
             else:
-                summary  = get_course_offering_summary(offering)
-                title    = "Full Attendance Report"
+                title = "Full Attendance Report"
                 filename = f"{offering.course.name}_full_report"
+            if student:
+                filename = f"{filename}_{student.student_id}"
+
             if report_format == 'csv':
-                return generate_course_csv(offering.course, summary, f"{filename}.csv")
+                return generate_offering_filtered_csv(
+                    offering,
+                    summary,
+                    aggregates,
+                    f"{filename}.csv",
+                    {
+                        'report_type': report_type,
+                        'start_date': str(start_date) if start_date else None,
+                        'end_date': str(end_date) if end_date else None,
+                        'student_label': f"{student.full_name} ({student.student_id})" if student else None,
+                    },
+                )
             buffer = generate_course_pdf(offering.course, summary, title)
             response = HttpResponse(buffer, content_type='application/pdf')
             response['Content-Disposition'] = (
@@ -1487,11 +1765,24 @@ class StudentReportView(APIView):
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         report_format = request.query_params.get('format', 'pdf')
         semester_id   = request.query_params.get('semester')
+        offering_id = request.query_params.get('offering')
+        report_type = request.query_params.get('type', 'full')
+        start_date = parse_report_date(request.query_params.get('start_date'))
+        end_date = parse_report_date(request.query_params.get('end_date'))
+        if report_type == 'weekly' and not start_date and not end_date:
+            end_date = date.today()
+            start_date = end_date - timedelta(days=7)
         try:
             records_qs = AttendanceRecord.objects.filter(student=student)
             if semester_id:
                 records_qs = records_qs.filter(
                     course_offering__section__semester_id=semester_id)
+            if offering_id:
+                records_qs = records_qs.filter(course_offering_id=offering_id)
+            if start_date:
+                records_qs = records_qs.filter(date__gte=start_date)
+            if end_date:
+                records_qs = records_qs.filter(date__lte=end_date)
             offering_ids   = records_qs.values_list(
                 'course_offering_id', flat=True).distinct()
             course_summaries = []
@@ -1530,3 +1821,19 @@ class StudentReportView(APIView):
             traceback.print_exc()
             return Response({'error': f'Report generation failed: {str(e)}'},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class SummaryReportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        report_format = request.query_params.get('format')
+        payload = build_summary_payload(request.user, request.query_params)
+        if report_format == 'csv':
+            return generate_summary_overview_csv(payload, "attendance_summary_overview.csv")
+        if report_format == 'pdf':
+            buffer = generate_summary_overview_pdf(payload)
+            response = HttpResponse(buffer, content_type='application/pdf')
+            response['Content-Disposition'] = 'attachment; filename="attendance_summary_overview.pdf"'
+            return response
+        return Response(payload)

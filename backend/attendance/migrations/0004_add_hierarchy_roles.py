@@ -19,7 +19,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('attendance', '0003_restore_stripped_fields'),
+        ('attendance', '0003_alter_attendancerecord_unique_together_and_more'),
     ]
 
     operations = [

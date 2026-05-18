@@ -73,4 +73,5 @@ urlpatterns = [
     # ── Reports ───────────────────────────────────────
     path('reports/offering/<int:offering_id>/', views.CourseOfferingReportView.as_view()),
     path('reports/student/<int:student_id>/',   views.StudentReportView.as_view()),
+    path('reports/summary/',                     views.SummaryReportView.as_view()),
 ]

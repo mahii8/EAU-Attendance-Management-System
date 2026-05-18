@@ -191,8 +191,15 @@ export const deleteOfferingApi = (id: number) =>
   api.delete(`/offerings/${id}/`);
 export const getOfferingStudentsApi = (offeringId: number) =>
   api.get(`/offerings/${offeringId}/students/`);
-export const getOfferingSummaryApi = (offeringId: number) =>
-  api.get(`/offerings/${offeringId}/summary/`);
+export const getOfferingSummaryApi = (
+  offeringId: number,
+  params?: {
+    type?: "full" | "weekly" | "custom";
+    student?: number;
+    start_date?: string;
+    end_date?: string;
+  },
+) => api.get(`/offerings/${offeringId}/summary/`, { params });
 
 // ── Attendance ────────────────────────────────────────────────
 export const getAttendanceApi = (params?: {
@@ -298,13 +305,28 @@ export const downloadReportApi = async (
   id: number,
   format: "pdf" | "csv",
   reportType: "full" | "weekly" = "full",
+  params?: {
+    student?: number;
+    offering?: number;
+    start_date?: string;
+    end_date?: string;
+  },
 ) => {
+  const token = localStorage.getItem("access_token");
+  if (!token) {
+    throw new Error("Session expired. Please log in again.");
+  }
   const url =
-    type === "offering"
-      ? `/reports/offering/${id}/?format=${format}&type=${reportType}`
-      : `/reports/student/${id}/?format=${format}`;
-
+    type === "offering" ? `/reports/offering/${id}/` : `/reports/student/${id}/`;
   const response = await api.get(url, {
+    params: {
+      format,
+      type: reportType,
+      ...params,
+    },
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
     responseType: "blob",
   });
 
@@ -318,6 +340,50 @@ export const downloadReportApi = async (
     type === "offering"
       ? `offering_${id}_${reportType}.${format}`
       : `student_${id}.${format}`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(objectUrl);
+};
+
+export const getSummaryReportApi = (params?: {
+  semester?: number;
+  programme?: number;
+  department?: number;
+  teacher?: number;
+  start_date?: string;
+  end_date?: string;
+}) => api.get("/reports/summary/", { params });
+
+export const downloadSummaryReportApi = async (
+  format: "pdf" | "csv",
+  params?: {
+    semester?: number;
+    programme?: number;
+    department?: number;
+    teacher?: number;
+    start_date?: string;
+    end_date?: string;
+  },
+) => {
+  const token = localStorage.getItem("access_token");
+  if (!token) {
+    throw new Error("Session expired. Please log in again.");
+  }
+  const response = await api.get("/reports/summary/", {
+    params: { format, ...params },
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    responseType: "blob",
+  });
+  const blob = new Blob([response.data], {
+    type: format === "pdf" ? "application/pdf" : "text/csv",
+  });
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = `attendance_summary_overview.${format}`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

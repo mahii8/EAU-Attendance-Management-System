@@ -2,7 +2,7 @@ import csv
 from io import BytesIO
 from datetime import date, timedelta
 from django.http import HttpResponse
-from django.db.models import Sum
+from django.db.models import Sum, Avg
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -392,14 +392,38 @@ def get_course_offering_summary(offering, start_date=None, end_date=None):
             filters['date__lte'] = end_date
             missed_filters['date__lte'] = end_date
 
-        attended_hours = AttendanceRecord.objects.filter(**filters).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
-        missed_hours = AttendanceRecord.objects.filter(**missed_filters).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        # Present counts fully, Late counts as 50% (policy)
+        present_hours = AttendanceRecord.objects.filter(
+            student=student,
+            course_offering=offering,
+            status='present',
+            **({} if not start_date else {'date__gte': start_date}),
+            **({} if not end_date else {'date__lte': end_date}),
+        ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        late_hours = AttendanceRecord.objects.filter(
+            student=student,
+            course_offering=offering,
+            status='late',
+            **({} if not start_date else {'date__gte': start_date}),
+            **({} if not end_date else {'date__lte': end_date}),
+        ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+
+        attended_hours = present_hours + late_hours
+        missed_qs = AttendanceRecord.objects.filter(**missed_filters)
+        missed_hours = missed_qs.aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        if missed_qs.exists() and missed_hours == 0:
+            # Historical records stored absent/excused with 0 hours.
+            fallback = AttendanceRecord.objects.filter(**filters).aggregate(avg=Avg('hours_attended'))['avg'] or Decimal('1.0')
+            missed_hours = fallback * Decimal(missed_qs.count())
+
         total_recorded = attended_hours + missed_hours
-        percentage = round(float(attended_hours / total_recorded * 100) if total_recorded > 0 else 100.0, 1)
+        earned = present_hours + (late_hours * Decimal('0.5'))
+        percentage = round(float(earned / total_recorded * 100) if total_recorded > 0 else 0.0, 1)
         status = 'Safe' if percentage >= 90 else ('Warning' if percentage >= 85 else 'At Risk')
 
         summary.append({
             'student_id': student.student_id,
+            'student_pk': student.id,
             'full_name': student.full_name,
             'attended_hours': float(attended_hours),
             'missed_hours': float(missed_hours),
@@ -409,3 +433,301 @@ def get_course_offering_summary(offering, start_date=None, end_date=None):
             'status': status,
         })
     return summary
+
+
+def get_offering_student_report_data(
+    offering,
+    start_date=None,
+    end_date=None,
+    student_id=None,
+    warning_threshold=85.0,
+    at_risk_threshold=75.0,
+):
+    enrollments = Enrollment.objects.filter(
+        section=offering.section,
+        status='active',
+    ).select_related('student')
+
+    if student_id:
+        enrollments = enrollments.filter(student_id=student_id)
+
+    rows = []
+    for enrollment in enrollments:
+        student = enrollment.student
+        records = AttendanceRecord.objects.filter(
+            student=student,
+            course_offering=offering,
+        )
+        if start_date:
+            records = records.filter(date__gte=start_date)
+        if end_date:
+            records = records.filter(date__lte=end_date)
+
+        present_hours = records.filter(
+            status='present'
+        ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        late_hours = records.filter(
+            status='late'
+        ).aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        excused_qs = records.filter(status='excused')
+        absent_qs = records.filter(status='absent')
+        excused_hours = excused_qs.aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+        absent_hours = absent_qs.aggregate(total=Sum('hours_attended'))['total'] or Decimal('0')
+
+        if excused_qs.exists() and excused_hours == 0:
+            fallback = records.filter(
+                status__in=['present', 'late'],
+                hours_attended__gt=0,
+            ).aggregate(avg=Avg('hours_attended'))['avg'] or Decimal('1.0')
+            excused_hours = fallback * Decimal(excused_qs.count())
+        if absent_qs.exists() and absent_hours == 0:
+            fallback = records.filter(
+                status__in=['present', 'late'],
+                hours_attended__gt=0,
+            ).aggregate(avg=Avg('hours_attended'))['avg'] or Decimal('1.0')
+            absent_hours = fallback * Decimal(absent_qs.count())
+
+        attended_hours = present_hours + late_hours
+        missed_hours = excused_hours + absent_hours
+        total_recorded = attended_hours + missed_hours
+        earned = present_hours + (late_hours * Decimal('0.5'))
+        percentage = round(float(earned / total_recorded * 100) if total_recorded > 0 else 0.0, 1)
+
+        if percentage < at_risk_threshold:
+            status = 'At Risk'
+        elif percentage < warning_threshold:
+            status = 'Warning'
+        else:
+            status = 'Safe'
+
+        rows.append({
+            'student_pk': student.id,
+            'student_id': student.student_id,
+            'full_name': student.full_name,
+            'present_hours': float(present_hours),
+            'late_hours': float(late_hours),
+            'excused_hours': float(excused_hours),
+            'absent_hours': float(absent_hours),
+            'attended_hours': float(attended_hours),
+            'missed_hours': float(missed_hours),
+            'total_hours': float(offering.course.total_credit_hours),
+            'percentage': percentage,
+            'minimum_required': float(offering.course.minimum_required_hours),
+            'status': status,
+        })
+
+    return rows
+
+
+def build_offering_report_aggregates(rows):
+    total_students = len(rows)
+    safe_count = sum(1 for r in rows if r['status'] == 'Safe')
+    warning_count = sum(1 for r in rows if r['status'] == 'Warning')
+    at_risk_count = sum(1 for r in rows if r['status'] == 'At Risk')
+
+    avg_percentage = round(
+        sum(r['percentage'] for r in rows) / total_students,
+        1,
+    ) if total_students else 0.0
+
+    bands = {
+        '<75%': 0,
+        '75-84.9%': 0,
+        '85-89.9%': 0,
+        '>=90%': 0,
+    }
+    for row in rows:
+        pct = row['percentage']
+        if pct < 75:
+            bands['<75%'] += 1
+        elif pct < 85:
+            bands['75-84.9%'] += 1
+        elif pct < 90:
+            bands['85-89.9%'] += 1
+        else:
+            bands['>=90%'] += 1
+
+    return {
+        'total_students': total_students,
+        'average_attendance_percentage': avg_percentage,
+        'safe_count': safe_count,
+        'warning_count': warning_count,
+        'at_risk_count': at_risk_count,
+        'risk_distribution': {
+            'Safe': safe_count,
+            'Warning': warning_count,
+            'At Risk': at_risk_count,
+        },
+        'attendance_bands': bands,
+    }
+
+
+def generate_offering_filtered_csv(offering, rows, aggregates, filename, filter_meta):
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    writer = csv.writer(response)
+    writer.writerow(['Ethiopian Aviation University'])
+    writer.writerow(['Student Attendance Management System'])
+    writer.writerow(['By Student Attendance Report'])
+    writer.writerow([])
+    writer.writerow([f'Course: {offering.course.name}'])
+    writer.writerow([f'Section: {offering.section.name} (Year {offering.section.year})'])
+    writer.writerow([f'Generated: {date.today().strftime("%d %B %Y")}'])
+    writer.writerow([f'Range Type: {filter_meta.get("report_type", "full")}'])
+    writer.writerow([f'Start Date: {filter_meta.get("start_date") or "N/A"}'])
+    writer.writerow([f'End Date: {filter_meta.get("end_date") or "N/A"}'])
+    writer.writerow([f'Selected Student: {filter_meta.get("student_label") or "All"}'])
+    writer.writerow([])
+    writer.writerow([
+        'Student ID',
+        'Student Name',
+        'Present Hours',
+        'Late Hours',
+        'Excused Hours',
+        'Absent Hours',
+        'Attended Total',
+        'Attendance %',
+        'Min Required Hours',
+        'Risk Status',
+    ])
+
+    for row in rows:
+        writer.writerow([
+            row['student_id'],
+            row['full_name'],
+            row['present_hours'],
+            row['late_hours'],
+            row['excused_hours'],
+            row['absent_hours'],
+            row['attended_hours'],
+            f"{row['percentage']}%",
+            row['minimum_required'],
+            row['status'],
+        ])
+
+    writer.writerow([])
+    writer.writerow(['Summary'])
+    writer.writerow(['Total Students', aggregates['total_students']])
+    writer.writerow(['Average Attendance %', aggregates['average_attendance_percentage']])
+    writer.writerow(['Safe', aggregates['safe_count']])
+    writer.writerow(['Warning', aggregates['warning_count']])
+    writer.writerow(['At Risk', aggregates['at_risk_count']])
+    writer.writerow([])
+    writer.writerow(['Graph Summary Data'])
+    writer.writerow(['Band', 'Students'])
+    for band, count in aggregates['attendance_bands'].items():
+        writer.writerow([band, count])
+
+    return response
+
+
+def generate_summary_overview_csv(payload, filename):
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+
+    writer.writerow(['EAU Attendance Executive Summary'])
+    writer.writerow([f"Generated: {date.today().strftime('%d %B %Y')}"])
+    writer.writerow([])
+
+    kpi = payload.get('kpis', {})
+    writer.writerow(['KPI', 'Value'])
+    writer.writerow(['Total Offerings', kpi.get('total_offerings', 0)])
+    writer.writerow(['Total Students', kpi.get('total_students', 0)])
+    writer.writerow(['Overall Average Attendance %', kpi.get('overall_average_attendance', 0)])
+    writer.writerow(['Total At Risk Students', kpi.get('total_at_risk_students', 0)])
+    writer.writerow(['Worst Offering', kpi.get('worst_offering_name', 'N/A')])
+    writer.writerow([])
+
+    writer.writerow(['Risk Distribution'])
+    writer.writerow(['Status', 'Count'])
+    for key, val in payload.get('risk_distribution', {}).items():
+        writer.writerow([key, val])
+    writer.writerow([])
+
+    writer.writerow(['Attendance Trend'])
+    writer.writerow(['Period', 'Average Attendance %'])
+    for row in payload.get('attendance_trend', []):
+        writer.writerow([row.get('period'), row.get('average_attendance')])
+    writer.writerow([])
+
+    writer.writerow(['Offering Analytics'])
+    writer.writerow([
+        'Offering',
+        'Programme',
+        'Department',
+        'Students',
+        'Average Attendance %',
+        'At Risk',
+        'Trend Delta',
+    ])
+    for row in payload.get('offering_analytics', []):
+        writer.writerow([
+            row.get('offering_label'),
+            row.get('programme_name'),
+            row.get('department_name'),
+            row.get('student_count'),
+            row.get('average_attendance'),
+            row.get('at_risk_count'),
+            row.get('trend_delta'),
+        ])
+    return response
+
+
+def generate_summary_overview_pdf(payload, title="Executive Attendance Summary"):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36
+    )
+    elements = []
+    styles = getSampleStyleSheet()
+    build_pdf_header(elements, title, "Cross-offering analytics snapshot", styles)
+
+    kpi = payload.get('kpis', {})
+    kpi_table = Table([
+        ['Metric', 'Value'],
+        ['Total Offerings', str(kpi.get('total_offerings', 0))],
+        ['Total Students', str(kpi.get('total_students', 0))],
+        ['Overall Average Attendance %', f"{kpi.get('overall_average_attendance', 0)}%"],
+        ['Total At Risk Students', str(kpi.get('total_at_risk_students', 0))],
+        ['Worst Offering', kpi.get('worst_offering_name', 'N/A')],
+    ], colWidths=[220, 420])
+    kpi_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), DARK_GREEN),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, LIGHT_GREEN]),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+    ]))
+    elements.append(kpi_table)
+    elements.append(Spacer(1, 14))
+
+    offerings = payload.get('offering_analytics', [])[:10]
+    offering_data = [['Offering', 'Students', 'Avg %', 'At Risk', 'Trend']]
+    for row in offerings:
+        offering_data.append([
+            row.get('offering_label'),
+            row.get('student_count'),
+            f"{row.get('average_attendance', 0)}%",
+            row.get('at_risk_count'),
+            row.get('trend_delta'),
+        ])
+    offering_table = Table(offering_data, colWidths=[300, 90, 90, 90, 90], repeatRows=1)
+    offering_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), DARK_GREEN),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, LIGHT_GREEN]),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+    ]))
+    elements.append(Paragraph("Top Offerings Snapshot", styles['Heading3']))
+    elements.append(offering_table)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
